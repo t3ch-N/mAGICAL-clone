@@ -597,26 +597,55 @@ export default function HomePage() {
       {/* Partners & Sponsors */}
       <section className="py-16 bg-white border-t border-border/40" data-testid="sponsors-section">
         <div className="container-custom">
-          <h3 className="font-subheading text-xs uppercase tracking-widest text-muted-foreground text-center mb-8">
-            Official Partners & Sponsors
+          {/* Main Partner */}
+          <h3 className="font-subheading text-xs uppercase tracking-widest text-muted-foreground text-center mb-4">
+            Main Partner
           </h3>
-          <div className="flex flex-wrap justify-center items-center gap-8 md:gap-16">
+          <div className="flex justify-center mb-10">
+            <img 
+              src={MINISTRY_LOGO} 
+              alt="Ministry of Youth Affairs, Creative Economy and Sports"
+              className="h-20 md:h-28 w-auto object-contain"
+            />
+          </div>
+          
+          {/* Official Partners */}
+          <h3 className="font-subheading text-xs uppercase tracking-widest text-muted-foreground text-center mb-6">
+            Official Partners
+          </h3>
+          <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 mb-10">
             <img 
               src={DP_WORLD_TOUR_LOGO} 
               alt="DP World Tour"
-              className="h-12 md:h-16 w-auto"
+              className="h-12 md:h-16 w-auto object-contain"
             />
             <img 
               src={MKO_LOGO} 
               alt="Magical Kenya Open"
-              className="h-14 md:h-20 w-auto"
+              className="h-14 md:h-20 w-auto object-contain"
             />
-            <div className="h-12 md:h-16 px-6 bg-muted flex items-center justify-center">
-              <span className="font-subheading font-semibold text-primary">Kenya Tourism</span>
-            </div>
-            <div className="h-12 md:h-16 px-6 bg-muted flex items-center justify-center">
-              <span className="font-subheading font-semibold text-primary">Safaricom</span>
-            </div>
+          </div>
+
+          {/* Tournament Sponsors */}
+          <h3 className="font-subheading text-xs uppercase tracking-widest text-muted-foreground text-center mb-6">
+            Tournament Sponsors
+          </h3>
+          <div className="flex flex-wrap justify-center items-center gap-8 md:gap-14">
+            <img 
+              src={ABSA_LOGO} 
+              alt="ABSA Kenya"
+              className="h-12 md:h-16 w-auto object-contain"
+            />
+            <img 
+              src={JOHNNIE_WALKER_LOGO} 
+              alt="Johnnie Walker"
+              className="h-16 md:h-24 w-auto object-contain"
+            />
+            <img 
+              src={SPORTPESA_LOGO} 
+              alt="SportPesa"
+              className="h-10 md:h-14 w-auto object-contain"
+            />
           </div>
         </div>
       </section>
