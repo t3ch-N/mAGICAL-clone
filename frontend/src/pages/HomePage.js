@@ -21,11 +21,12 @@ import {
 
 // Logo URLs
 const MKO_LOGO = "https://customer-assets.emergentagent.com/job_kenya-golf-tourney/artifacts/n9g48emm_MKO%20logo.jpeg";
-const DP_WORLD_TOUR_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/h2va547a_DPWORLD%20LOGO.jpg";
-const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_kenya-golf-tourney/artifacts/ch5rc2h4_KENYA%20OPEN%20LOGO_250724_100403.pdf";
+const DP_WORLD_TOUR_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/71ky16t3_DPWORLD%20TOUR.png"; // European Tour logo
+const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png"; // Kenya Open Golf Ltd
 
 // Partner & Sponsor Logos
 const MINISTRY_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/q0qxyns1_MINISTRY.png";
+const DPWORLD_SPONSOR_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/h2va547a_DPWORLD%20LOGO.jpg"; // DP World sponsor (blue)
 const ABSA_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/2h0ry18x_ABSA%20KENYA.jpg";
 const JOHNNIE_WALKER_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/0cc2631j_JOHNYWALKER%20LOGO.jpg";
 const SPORTPESA_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/0baz3u7v_SPORTS%20PESA.png";
