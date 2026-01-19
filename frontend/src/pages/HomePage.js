@@ -279,16 +279,11 @@ export default function HomePage() {
     <div data-testid="home-page">
       {/* Official Partners Banner */}
       <div className="bg-white border-b border-border/40 py-3">
-        <div className="container-custom flex items-center justify-center gap-8 md:gap-16">
+        <div className="container-custom flex items-center justify-center gap-6 md:gap-12">
           <span className="text-xs uppercase tracking-widest text-muted-foreground hidden md:block">Official Partners</span>
-          <img src={DP_WORLD_TOUR_LOGO} alt="DP World Tour" className="h-8 md:h-10 w-auto" />
-          <div className="flex items-center gap-2">
-            <div className="text-center">
-              <div className="font-subheading font-bold text-[10px] md:text-xs text-primary leading-tight">GOVERNMENT OF KENYA</div>
-              <div className="font-body text-[8px] md:text-[10px] text-muted-foreground leading-tight">Ministry of Youth Affairs,</div>
-              <div className="font-body text-[8px] md:text-[10px] text-muted-foreground leading-tight">Creative Economy & Sports</div>
-            </div>
-          </div>
+          <img src={DP_WORLD_TOUR_LOGO} alt="DP World Tour" className="h-10 md:h-14 w-auto object-contain" />
+          <div className="h-10 md:h-14 w-px bg-border/60 hidden md:block" />
+          <img src={MINISTRY_LOGO} alt="Ministry of Youth Affairs, Creative Economy and Sports" className="h-10 md:h-14 w-auto object-contain" />
         </div>
       </div>
 
