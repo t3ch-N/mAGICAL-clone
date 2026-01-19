@@ -144,6 +144,7 @@ export default function AdminDashboard() {
             <Route index element={<DashboardOverview stats={stats} />} />
             <Route path="users" element={<UsersManagement />} />
             <Route path="content" element={<ContentManagement />} />
+            <Route path="uploads" element={<MediaUploads />} />
             <Route path="leaderboard" element={<LeaderboardManagement />} />
             <Route path="enquiries" element={<EnquiriesManagement />} />
           </Routes>
