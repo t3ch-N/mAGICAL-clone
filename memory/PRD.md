@@ -137,10 +137,15 @@ Then restart backend: `sudo supervisorctl restart backend`
 ### Features Added (V1.4 - January 2025)
 - ✅ **Updated Sponsor Logos**: Added official sponsor images provided by user
   - Main Partner: Ministry of Youth Affairs, Creative Economy and Sports (Government of Kenya)
-  - Official Partners: DP World Tour, Magical Kenya Open
-  - Tournament Sponsors: ABSA Kenya, Johnnie Walker, SportPesa
-- ✅ **Official Partners Banner**: Displays DP World and Ministry logos at top of homepage
-- ✅ **Sponsors Section Hierarchy**: Clear visual hierarchy with Main Partner, Official Partners, and Tournament Sponsors sections
+  - Official Partners: DP World Tour (European Tour), Magical Kenya Open
+  - Tournament Sponsors: DP World (blue logo), ABSA Kenya, Johnnie Walker, SportPesa
+- ✅ **Top Banner**: DP World Tour logo (left) + KOGL logo (right) - no "Official Partners" text
+- ✅ **Sponsors Section Hierarchy**: Clear visual hierarchy with Main Partner, Official Partners, and Tournament Sponsors
+- ✅ **KOGL Page Logo**: Added KOGL logo prominently on About KOGL page
+
+**Important Distinction:**
+- DP World Tour = European Tour organization (Magical Kenya Open is part of this tour)
+- DP World = Company sponsor (appears in Tournament Sponsors section)
 
 ## Prioritized Backlog (Updated)
 
