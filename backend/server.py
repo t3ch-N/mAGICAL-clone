@@ -637,6 +637,14 @@ async def reject_user(request: Request, user_id: str, background_tasks: Backgrou
         {"$set": {"status": "rejected", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     
+    # Send rejection email in background
+    background_tasks.add_task(
+        send_rejection_email,
+        user_doc.get("email"),
+        user_doc.get("name", "User"),
+        requested_role
+    )
+    
     return {"message": "User rejected"}
 
 @api_router.put("/admin/users/{user_id}")
