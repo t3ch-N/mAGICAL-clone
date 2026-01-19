@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { API } from '../App';
@@ -47,7 +47,10 @@ import {
   Edit,
   Trash2,
   Eye,
-  Send
+  Send,
+  Upload,
+  Copy,
+  ImageIcon
 } from 'lucide-react';
 
 // Admin Dashboard Component
