@@ -108,7 +108,7 @@ export default function HomePage() {
 
             {/* Countdown */}
             <div className="mb-10 flex justify-center">
-              <CountdownTimer targetDate="2025-03-06T07:00:00" />
+              <CountdownTimer targetDate="2026-02-19T07:00:00" />
             </div>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
