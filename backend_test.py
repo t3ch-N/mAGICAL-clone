@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 class MagicalKenyaOpenAPITester:
-    def __init__(self, base_url="https://kenya-golf-tourney.preview.emergentagent.com"):
+    def __init__(self, base_url="https://magical-kenya-golf.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.session_token = None
