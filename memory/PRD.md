@@ -127,3 +127,34 @@ SMTP_FROM_EMAIL=your-gmail@gmail.com
 SMTP_FROM_NAME=Magical Kenya Open
 ```
 Then restart backend: `sudo supervisorctl restart backend`
+
+### Features Added (V1.3 - January 2025)
+- ✅ **Homepage Media Carousel**: Featured content with videos, articles, gallery items
+- ✅ **Player Spotlight Section**: Showcasing key players with photos
+- ✅ **Venue Update**: Karen Country Club as 2026 host venue with course details
+- ✅ **Kenya Experience CTA**: Promotional section for safari/tourism
+
+### Features Added (V1.4 - January 2025)
+- ✅ **Updated Sponsor Logos**: Added official sponsor images provided by user
+  - Main Partner: Ministry of Youth Affairs, Creative Economy and Sports (Government of Kenya)
+  - Official Partners: DP World Tour, Magical Kenya Open
+  - Tournament Sponsors: ABSA Kenya, Johnnie Walker, SportPesa
+- ✅ **Official Partners Banner**: Displays DP World and Ministry logos at top of homepage
+- ✅ **Sponsors Section Hierarchy**: Clear visual hierarchy with Main Partner, Official Partners, and Tournament Sponsors sections
+
+## Prioritized Backlog (Updated)
+
+### P0 (Critical - Next Phase)
+- ✅ ~~Update homepage sponsor logos~~ (COMPLETED)
+- Email notifications (BLOCKED - waiting for user Gmail credentials)
+- PDF downloads for policies (ensure download functionality works)
+
+### P1 (High Priority)
+- Live API integration for real tournament scores
+- Board member photo uploads
+- Player profile detail pages
+
+### P2 (Medium Priority)
+- Stripe/payment integration for tickets
+- Social sharing for news articles
+- Multi-language support (Swahili)
