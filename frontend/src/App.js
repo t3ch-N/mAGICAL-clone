@@ -1,53 +1,82 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
+
+// Pages
+import HomePage from "./pages/HomePage";
+import TournamentPage from "./pages/TournamentPage";
+import LeaderboardPage from "./pages/LeaderboardPage";
+import TicketsPage from "./pages/TicketsPage";
+import TravelPage from "./pages/TravelPage";
+import MediaPage from "./pages/MediaPage";
+import RegistrationPage from "./pages/RegistrationPage";
+import NewsPage from "./pages/NewsPage";
+import GalleryPage from "./pages/GalleryPage";
+import AboutPage from "./pages/AboutPage";
+import AboutKOGLPage from "./pages/AboutKOGLPage";
+import ContactPage from "./pages/ContactPage";
+import AdminDashboard from "./pages/AdminDashboard";
+
+// Components
+import MainLayout from "./components/MainLayout";
+import AuthCallback from "./components/AuthCallback";
+import ProtectedRoute from "./components/ProtectedRoute";
+
+import { Toaster } from "./components/ui/sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+export const API = `${BACKEND_URL}/api`;
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
+// Auth context
+import { AuthProvider } from "./context/AuthContext";
 
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function AppRouter() {
+  const location = useLocation();
+  
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  // Check URL fragment for session_id synchronously during render
+  if (location.hash?.includes('session_id=')) {
+    return <AuthCallback />;
+  }
+  
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
+    <Routes>
+      <Route element={<MainLayout />}>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/tournament" element={<TournamentPage />} />
+        <Route path="/leaderboard" element={<LeaderboardPage />} />
+        <Route path="/players/:playerId" element={<LeaderboardPage />} />
+        <Route path="/tickets" element={<TicketsPage />} />
+        <Route path="/travel" element={<TravelPage />} />
+        <Route path="/media" element={<MediaPage />} />
+        <Route path="/registration" element={<RegistrationPage />} />
+        <Route path="/news" element={<NewsPage />} />
+        <Route path="/news/:articleId" element={<NewsPage />} />
+        <Route path="/gallery" element={<GalleryPage />} />
+        <Route path="/about" element={<AboutPage />} />
+        <Route path="/about-kogl" element={<AboutKOGLPage />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route 
+          path="/admin/*" 
+          element={
+            <ProtectedRoute requireAdmin>
+              <AdminDashboard />
+            </ProtectedRoute>
+          } 
+        />
+      </Route>
+    </Routes>
   );
-};
+}
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
+        <AppRouter />
+        <Toaster position="top-right" />
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
