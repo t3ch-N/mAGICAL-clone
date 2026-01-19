@@ -276,7 +276,13 @@ export default function HomePage() {
         <div className="container-custom flex items-center justify-center gap-8 md:gap-16">
           <span className="text-xs uppercase tracking-widest text-muted-foreground hidden md:block">Official Partners</span>
           <img src={DP_WORLD_TOUR_LOGO} alt="DP World Tour" className="h-8 md:h-10 w-auto" />
-          <img src={MKO_LOGO} alt="Magical Kenya Open" className="h-10 md:h-12 w-auto" />
+          <div className="flex items-center gap-2">
+            <div className="text-center">
+              <div className="font-subheading font-bold text-[10px] md:text-xs text-primary leading-tight">GOVERNMENT OF KENYA</div>
+              <div className="font-body text-[8px] md:text-[10px] text-muted-foreground leading-tight">Ministry of Youth Affairs,</div>
+              <div className="font-body text-[8px] md:text-[10px] text-muted-foreground leading-tight">Creative Economy & Sports</div>
+            </div>
+          </div>
         </div>
       </div>
 
