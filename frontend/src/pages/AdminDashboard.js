@@ -1153,3 +1153,344 @@ function MediaUploads() {
   );
 }
 
+// Policies Management
+function PoliciesManagement() {
+  const [policies, setPolicies] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [newPolicy, setNewPolicy] = useState({
+    title: '',
+    description: '',
+    category: 'general'
+  });
+  const fileInputRef = useRef(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+
+  const fetchPolicies = async () => {
+    try {
+      const response = await fetch(`${API}/admin/policies`, { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        setPolicies(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch policies:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPolicies();
+  }, []);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+      toast.error('Only PDF files are allowed');
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error('File too large. Maximum size is 20MB.');
+      return;
+    }
+
+    setSelectedFile(file);
+    setNewPolicy(prev => ({
+      ...prev,
+      title: prev.title || file.name.replace('.pdf', '').replace(/_/g, ' ')
+    }));
+  };
+
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    if (!selectedFile) {
+      toast.error('Please select a PDF file');
+      return;
+    }
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('title', newPolicy.title);
+    formData.append('description', newPolicy.description);
+    formData.append('category', newPolicy.category);
+
+    try {
+      const response = await fetch(`${API}/admin/policies/upload?title=${encodeURIComponent(newPolicy.title)}&description=${encodeURIComponent(newPolicy.description)}&category=${newPolicy.category}`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData
+      });
+
+      if (response.ok) {
+        toast.success('Policy document uploaded successfully!');
+        setDialogOpen(false);
+        setNewPolicy({ title: '', description: '', category: 'general' });
+        setSelectedFile(null);
+        fetchPolicies();
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || 'Upload failed');
+      }
+    } catch (error) {
+      toast.error('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = async (policyId) => {
+    if (!window.confirm('Are you sure you want to delete this policy document?')) return;
+
+    try {
+      const response = await fetch(`${API}/admin/policies/${policyId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        toast.success('Policy deleted');
+        fetchPolicies();
+      } else {
+        toast.error('Failed to delete policy');
+      }
+    } catch (error) {
+      toast.error('Failed to delete policy');
+    }
+  };
+
+  const toggleActive = async (policyId, isActive) => {
+    try {
+      const response = await fetch(`${API}/admin/policies/${policyId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ is_active: !isActive })
+      });
+
+      if (response.ok) {
+        toast.success(`Policy ${!isActive ? 'activated' : 'deactivated'}`);
+        fetchPolicies();
+      }
+    } catch (error) {
+      toast.error('Failed to update policy');
+    }
+  };
+
+  const categoryLabels = {
+    general: 'General',
+    governance: 'Governance',
+    compliance: 'Compliance',
+    conduct: 'Code of Conduct',
+    other: 'Other'
+  };
+
+  return (
+    <div data-testid="admin-policies">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="font-heading text-2xl font-bold">Policy Documents</h2>
+          <p className="text-muted-foreground text-sm font-body">
+            Upload and manage policy PDFs for the KOGL website
+          </p>
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button className="btn-primary gap-2" data-testid="upload-policy-btn">
+              <Upload className="w-4 h-4" />
+              Upload Policy
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="font-heading">Upload Policy Document</DialogTitle>
+              <DialogDescription className="font-body">
+                Upload a PDF document for the policies section
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleUpload} className="space-y-4">
+              <div>
+                <Label>PDF File *</Label>
+                <div className="mt-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full justify-start"
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    {selectedFile ? selectedFile.name : 'Choose PDF file...'}
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="policy-title">Title *</Label>
+                <Input
+                  id="policy-title"
+                  value={newPolicy.title}
+                  onChange={(e) => setNewPolicy(prev => ({ ...prev, title: e.target.value }))}
+                  required
+                />
+              </div>
+              <div>
+                <Label htmlFor="policy-category">Category</Label>
+                <Select 
+                  value={newPolicy.category}
+                  onValueChange={(value) => setNewPolicy(prev => ({ ...prev, category: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="general">General</SelectItem>
+                    <SelectItem value="governance">Governance</SelectItem>
+                    <SelectItem value="compliance">Compliance</SelectItem>
+                    <SelectItem value="conduct">Code of Conduct</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="policy-description">Description</Label>
+                <Textarea
+                  id="policy-description"
+                  value={newPolicy.description}
+                  onChange={(e) => setNewPolicy(prev => ({ ...prev, description: e.target.value }))}
+                  rows={3}
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" className="btn-primary" disabled={uploading || !selectedFile}>
+                  {uploading ? 'Uploading...' : 'Upload Policy'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Policies List */}
+      {loading ? (
+        <div className="text-center py-12">
+          <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
+        </div>
+      ) : policies.length === 0 ? (
+        <Card className="card-default">
+          <CardContent className="py-16 text-center">
+            <FileText className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+            <h3 className="font-heading text-lg font-bold mb-2">No policy documents yet</h3>
+            <p className="text-muted-foreground font-body mb-4">
+              Upload PDF documents to display on the KOGL policies page
+            </p>
+            <Button variant="outline" onClick={() => setDialogOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Your First Policy
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="card-default">
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Uploaded</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {policies.map((policy) => (
+                  <TableRow key={policy.policy_id}>
+                    <TableCell>
+                      <div>
+                        <p className="font-medium">{policy.title}</p>
+                        {policy.description && (
+                          <p className="text-xs text-muted-foreground truncate max-w-xs">
+                            {policy.description}
+                          </p>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{categoryLabels[policy.category] || policy.category}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge className={policy.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}>
+                        {policy.is_active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {new Date(policy.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        <a href={policy.file_url} target="_blank" rel="noopener noreferrer">
+                          <Button size="sm" variant="outline" title="View PDF">
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                        </a>
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => toggleActive(policy.policy_id, policy.is_active)}
+                          title={policy.is_active ? 'Deactivate' : 'Activate'}
+                        >
+                          {policy.is_active ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="destructive"
+                          onClick={() => handleDelete(policy.policy_id)}
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Info Card */}
+      <Card className="card-default mt-8 bg-muted/50">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <FileText className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-muted-foreground">
+              <p className="font-medium text-foreground mb-1">Policy Document Guidelines</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Only PDF files are accepted (max 20MB)</li>
+                <li>Active policies are displayed on the public KOGL page</li>
+                <li>Use clear, descriptive titles for better organization</li>
+              </ul>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+
