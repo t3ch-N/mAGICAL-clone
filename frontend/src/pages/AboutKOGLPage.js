@@ -341,24 +341,40 @@ export default function AboutKOGLPage() {
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {policies.map((policy, i) => (
-                  <Card key={i} className="card-default hover-lift group cursor-pointer" data-testid={`policy-${i}`}>
-                    <CardContent className="p-6">
-                      <div className="flex items-start justify-between">
-                        <div className="w-10 h-10 bg-primary/10 flex items-center justify-center mb-4">
-                          <policy.icon className="w-5 h-5 text-primary" />
+                {allPolicies.map((policy, i) => {
+                  const IconComponent = policy.icon || FileText;
+                  const hasDownload = policy.file_url;
+                  
+                  return (
+                    <Card key={policy.policy_id || i} className="card-default hover-lift group" data-testid={`policy-${i}`}>
+                      <CardContent className="p-6">
+                        <div className="flex items-start justify-between">
+                          <div className="w-10 h-10 bg-primary/10 flex items-center justify-center mb-4">
+                            <IconComponent className="w-5 h-5 text-primary" />
+                          </div>
+                          {hasDownload && (
+                            <ExternalLink className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                          )}
                         </div>
-                        <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-                      </div>
-                      <h3 className="font-heading text-lg font-bold mb-2">{policy.title}</h3>
-                      <p className="text-muted-foreground font-body text-sm">{policy.description}</p>
-                      <Button variant="ghost" size="sm" className="mt-4 p-0 h-auto text-primary hover:text-primary/80">
-                        <Download className="w-4 h-4 mr-2" />
-                        Download PDF
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
+                        <h3 className="font-heading text-lg font-bold mb-2">{policy.title}</h3>
+                        <p className="text-muted-foreground font-body text-sm">{policy.description}</p>
+                        {hasDownload ? (
+                          <a href={policy.file_url} target="_blank" rel="noopener noreferrer">
+                            <Button variant="ghost" size="sm" className="mt-4 p-0 h-auto text-primary hover:text-primary/80">
+                              <Download className="w-4 h-4 mr-2" />
+                              Download PDF
+                            </Button>
+                          </a>
+                        ) : (
+                          <Button variant="ghost" size="sm" className="mt-4 p-0 h-auto text-muted-foreground" disabled>
+                            <Download className="w-4 h-4 mr-2" />
+                            Coming Soon
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
 
               <Card className="card-default mt-8 bg-primary/5 border-primary/20">
