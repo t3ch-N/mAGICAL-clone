@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 
 const KOGL_BG = "https://images.pexels.com/photos/1325744/pexels-photo-1325744.jpeg";
+const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
 
 // Board Members
 const boardMembers = [
