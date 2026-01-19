@@ -37,9 +37,181 @@ api_router = APIRouter(prefix="/api")
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# Create policies directory
+POLICIES_DIR = ROOT_DIR / "policies"
+POLICIES_DIR.mkdir(exist_ok=True)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ===================== EMAIL CONFIG =====================
+SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM_EMAIL = os.environ.get('SMTP_FROM_EMAIL', SMTP_USER)
+SMTP_FROM_NAME = os.environ.get('SMTP_FROM_NAME', 'Magical Kenya Open')
+
+async def send_email(to_email: str, subject: str, html_content: str, plain_content: str = None):
+    """Send email via Gmail SMTP"""
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.warning("SMTP credentials not configured - email not sent")
+        return False
+    
+    try:
+        message = MIMEMultipart("alternative")
+        message["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        message["To"] = to_email
+        message["Subject"] = subject
+        
+        # Add plain text version
+        if plain_content:
+            part1 = MIMEText(plain_content, "plain")
+            message.attach(part1)
+        
+        # Add HTML version
+        part2 = MIMEText(html_content, "html")
+        message.attach(part2)
+        
+        await aiosmtplib.send(
+            message,
+            hostname=SMTP_HOST,
+            port=SMTP_PORT,
+            start_tls=True,
+            username=SMTP_USER,
+            password=SMTP_PASSWORD
+        )
+        
+        logger.info(f"Email sent successfully to {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        return False
+
+async def send_approval_email(user_email: str, user_name: str, role: str):
+    """Send approval notification email"""
+    subject = "Your Magical Kenya Open Registration Has Been Approved!"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background-color: #1a472a; color: white; padding: 30px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .content {{ padding: 30px; background: #fdfbf7; }}
+            .badge {{ display: inline-block; background: #e31937; color: white; padding: 5px 15px; font-size: 12px; text-transform: uppercase; }}
+            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+            .btn {{ display: inline-block; background: #1a472a; color: white; padding: 12px 30px; text-decoration: none; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Magical Kenya Open 2026</h1>
+            </div>
+            <div class="content">
+                <span class="badge">Registration Approved</span>
+                <h2>Congratulations, {user_name}!</h2>
+                <p>Your registration for the <strong>Magical Kenya Open 2026</strong> has been approved.</p>
+                <p><strong>Role:</strong> {role.replace('_', ' ').title()}</p>
+                <p>You now have access to the restricted areas of our website based on your role. Log in to access exclusive content and resources.</p>
+                <p><strong>Event Details:</strong></p>
+                <ul>
+                    <li>Date: February 19-22, 2026</li>
+                    <li>Venue: Karen Country Club, Nairobi</li>
+                </ul>
+                <p>We look forward to seeing you at the tournament!</p>
+            </div>
+            <div class="footer">
+                <p>Kenya Open Golf Limited | Nairobi, Kenya</p>
+                <p>info@magicalkenyaopen.com</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    plain_content = f"""
+    Congratulations, {user_name}!
+    
+    Your registration for the Magical Kenya Open 2026 has been approved.
+    
+    Role: {role.replace('_', ' ').title()}
+    
+    You now have access to the restricted areas of our website based on your role.
+    
+    Event Details:
+    - Date: February 19-22, 2026
+    - Venue: Karen Country Club, Nairobi
+    
+    We look forward to seeing you at the tournament!
+    
+    ---
+    Kenya Open Golf Limited
+    info@magicalkenyaopen.com
+    """
+    
+    return await send_email(user_email, subject, html_content, plain_content)
+
+async def send_rejection_email(user_email: str, user_name: str, role: str):
+    """Send rejection notification email"""
+    subject = "Update on Your Magical Kenya Open Registration"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background-color: #1a472a; color: white; padding: 30px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .content {{ padding: 30px; background: #fdfbf7; }}
+            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Magical Kenya Open 2026</h1>
+            </div>
+            <div class="content">
+                <h2>Dear {user_name},</h2>
+                <p>Thank you for your interest in the Magical Kenya Open 2026.</p>
+                <p>After careful review, we regret to inform you that we are unable to approve your registration as <strong>{role.replace('_', ' ').title()}</strong> at this time.</p>
+                <p>This may be due to limited availability or incomplete documentation. If you believe this was an error or would like more information, please contact our team.</p>
+                <p>We appreciate your understanding and encourage you to attend the tournament as a spectator. Tickets are available on our website.</p>
+            </div>
+            <div class="footer">
+                <p>Kenya Open Golf Limited | Nairobi, Kenya</p>
+                <p>info@magicalkenyaopen.com</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    plain_content = f"""
+    Dear {user_name},
+    
+    Thank you for your interest in the Magical Kenya Open 2026.
+    
+    After careful review, we regret to inform you that we are unable to approve your registration as {role.replace('_', ' ').title()} at this time.
+    
+    This may be due to limited availability or incomplete documentation. If you believe this was an error or would like more information, please contact our team.
+    
+    We appreciate your understanding and encourage you to attend the tournament as a spectator.
+    
+    ---
+    Kenya Open Golf Limited
+    info@magicalkenyaopen.com
+    """
+    
+    return await send_email(user_email, subject, html_content, plain_content)
 
 # ===================== ENUMS =====================
 class UserRole(str, Enum):
