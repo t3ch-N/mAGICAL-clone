@@ -916,3 +916,238 @@ function EnquiriesManagement() {
     </div>
   );
 }
+
+// Media Uploads Management
+function MediaUploads() {
+  const [uploads, setUploads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const fetchUploads = async () => {
+    try {
+      const response = await fetch(`${API}/admin/uploads`, { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        setUploads(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch uploads:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUploads();
+  }, []);
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error('Invalid file type. Only JPEG, PNG, GIF, WebP allowed.');
+      return;
+    }
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File too large. Maximum size is 10MB.');
+      return;
+    }
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API}/admin/upload`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        toast.success('Image uploaded successfully!');
+        fetchUploads();
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || 'Upload failed');
+      }
+    } catch (error) {
+      toast.error('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleDelete = async (filename) => {
+    if (!window.confirm('Are you sure you want to delete this image?')) return;
+
+    try {
+      const response = await fetch(`${API}/admin/uploads/${filename}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        toast.success('Image deleted');
+        fetchUploads();
+      } else {
+        toast.error('Failed to delete image');
+      }
+    } catch (error) {
+      toast.error('Failed to delete image');
+    }
+  };
+
+  const copyUrl = (url) => {
+    const fullUrl = `${window.location.origin}${url}`;
+    navigator.clipboard.writeText(fullUrl);
+    toast.success('URL copied to clipboard!');
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div data-testid="admin-uploads">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="font-heading text-2xl font-bold">Media Library</h2>
+          <p className="text-muted-foreground text-sm font-body">
+            Upload and manage images for news articles and gallery
+          </p>
+        </div>
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            onChange={handleFileSelect}
+            className="hidden"
+            data-testid="file-input"
+          />
+          <Button 
+            className="btn-primary gap-2"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            data-testid="upload-button"
+          >
+            {uploading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4" />
+                Upload Image
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* Upload Info */}
+      <Card className="card-default mb-6 bg-muted/50">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <ImageIcon className="w-5 h-5" />
+            <span>Supported formats: JPEG, PNG, GIF, WebP • Max file size: 10MB</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Gallery Grid */}
+      {loading ? (
+        <div className="text-center py-12">
+          <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
+        </div>
+      ) : uploads.length === 0 ? (
+        <Card className="card-default">
+          <CardContent className="py-16 text-center">
+            <ImageIcon className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+            <h3 className="font-heading text-lg font-bold mb-2">No images uploaded yet</h3>
+            <p className="text-muted-foreground font-body mb-4">
+              Upload images to use in news articles and gallery
+            </p>
+            <Button 
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Your First Image
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          {uploads.map((file) => (
+            <Card key={file.filename} className="card-default group overflow-hidden" data-testid={`upload-${file.filename}`}>
+              <div className="aspect-square relative">
+                <img 
+                  src={file.url}
+                  alt={file.filename}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                  <Button 
+                    size="sm" 
+                    variant="secondary"
+                    onClick={() => copyUrl(file.url)}
+                    title="Copy URL"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant="destructive"
+                    onClick={() => handleDelete(file.filename)}
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              <CardContent className="p-3">
+                <p className="text-xs font-mono truncate text-muted-foreground" title={file.filename}>
+                  {file.filename}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatFileSize(file.size)}
+                </p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Usage Instructions */}
+      <Card className="card-default mt-8">
+        <CardHeader>
+          <CardTitle className="font-heading text-lg">How to Use Uploaded Images</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ol className="list-decimal list-inside space-y-2 text-sm font-body text-muted-foreground">
+            <li>Upload an image using the button above</li>
+            <li>Hover over the image and click the copy icon to copy the URL</li>
+            <li>Paste the URL in the "Featured Image" field when creating news articles</li>
+            <li>Or use the URL in gallery items</li>
+          </ol>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
