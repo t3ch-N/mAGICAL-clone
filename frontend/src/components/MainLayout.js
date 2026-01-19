@@ -8,7 +8,13 @@ import {
   ChevronDown,
   User,
   LogOut,
-  Settings
+  Settings,
+  Shield,
+  Facebook,
+  Twitter,
+  Instagram,
+  Youtube,
+  Linkedin
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -19,6 +25,15 @@ import {
 } from "./ui/dropdown-menu";
 
 const MKO_LOGO_URL = "https://customer-assets.emergentagent.com/job_kenya-golf-tourney/artifacts/n9g48emm_MKO%20logo.jpeg";
+
+// Social media links
+const socialLinks = [
+  { name: 'Facebook', icon: Facebook, url: 'https://www.facebook.com/MagicalKenyaOpen' },
+  { name: 'Twitter', icon: Twitter, url: 'https://twitter.com/MagicalKenyaOpn' },
+  { name: 'Instagram', icon: Instagram, url: 'https://www.instagram.com/magicalkenyaopen/' },
+  { name: 'YouTube', icon: Youtube, url: 'https://www.youtube.com/@MagicalKenyaOpen' },
+  { name: 'LinkedIn', icon: Linkedin, url: 'https://www.linkedin.com/company/kenya-open-golf-limited/' },
+];
 
 const navItems = [
   { name: 'Home', path: '/' },
