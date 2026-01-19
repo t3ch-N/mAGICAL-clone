@@ -85,6 +85,7 @@ export default function AdminDashboard() {
     { path: '/admin', label: 'Dashboard', icon: LayoutDashboard, exact: true },
     { path: '/admin/users', label: 'Users', icon: Users },
     { path: '/admin/content', label: 'Content', icon: FileText },
+    { path: '/admin/uploads', label: 'Media', icon: ImageIcon },
     { path: '/admin/leaderboard', label: 'Leaderboard', icon: Trophy },
     { path: '/admin/enquiries', label: 'Enquiries', icon: Mail }
   ];
