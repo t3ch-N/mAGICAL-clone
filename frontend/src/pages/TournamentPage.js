@@ -160,19 +160,19 @@ export default function TournamentPage() {
                     </Card>
                     <Card className="card-default">
                       <CardContent className="p-4 text-center">
-                        <div className="font-subheading text-2xl font-bold text-primary">{info?.course_par || 71}</div>
+                        <div className="font-subheading text-2xl font-bold text-primary">{info?.course_par || 72}</div>
                         <div className="text-sm text-muted-foreground">Par</div>
                       </CardContent>
                     </Card>
                     <Card className="card-default">
                       <CardContent className="p-4 text-center">
-                        <div className="font-subheading text-2xl font-bold text-primary">{info?.course_yards || '6,902'}</div>
+                        <div className="font-subheading text-2xl font-bold text-primary">{info?.course_yards || '6,818'}</div>
                         <div className="text-sm text-muted-foreground">Yards</div>
                       </CardContent>
                     </Card>
                     <Card className="card-default">
                       <CardContent className="p-4 text-center">
-                        <div className="font-subheading text-2xl font-bold text-primary">1913</div>
+                        <div className="font-subheading text-2xl font-bold text-primary">1937</div>
                         <div className="text-sm text-muted-foreground">Established</div>
                       </CardContent>
                     </Card>
@@ -181,7 +181,7 @@ export default function TournamentPage() {
                 <div>
                   <img 
                     src={COURSE_BG}
-                    alt="Muthaiga Golf Club"
+                    alt="Karen Country Club"
                     className="w-full h-full object-cover min-h-[400px]"
                   />
                 </div>
