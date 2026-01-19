@@ -263,9 +263,25 @@ export default function MainLayout() {
                 alt="Magical Kenya Open" 
                 className="h-16 w-auto mb-6 brightness-0 invert"
               />
-              <p className="text-primary-foreground/70 font-body text-sm leading-relaxed">
+              <p className="text-primary-foreground/70 font-body text-sm leading-relaxed mb-4">
                 Experience world-class golf in the heart of Kenya. A DP World Tour event showcasing Africa's finest golfing talent.
               </p>
+              {/* Social Links */}
+              <div className="flex gap-3">
+                {socialLinks.map((social) => (
+                  <a
+                    key={social.name}
+                    href={social.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-9 h-9 bg-primary-foreground/10 flex items-center justify-center hover:bg-primary-foreground/20 transition-colors"
+                    data-testid={`social-${social.name.toLowerCase()}`}
+                    title={social.name}
+                  >
+                    <social.icon className="w-4 h-4" />
+                  </a>
+                ))}
+              </div>
             </div>
 
             {/* Quick Links */}
@@ -314,6 +330,17 @@ export default function MainLayout() {
                   </a>
                 </p>
               </address>
+              {/* Admin Login Link */}
+              <div className="mt-6 pt-4 border-t border-primary-foreground/20">
+                <Link 
+                  to="/registration"
+                  className="inline-flex items-center gap-2 text-primary-foreground/50 hover:text-primary-foreground text-xs font-body transition-colors"
+                  data-testid="admin-login-link"
+                >
+                  <Shield className="w-3 h-3" />
+                  Admin Login
+                </Link>
+              </div>
             </div>
           </div>
 
