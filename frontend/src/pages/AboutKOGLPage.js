@@ -132,6 +132,26 @@ const partners = [
 ];
 
 export default function AboutKOGLPage() {
+  const [uploadedPolicies, setUploadedPolicies] = useState([]);
+
+  useEffect(() => {
+    // Fetch uploaded policies from API
+    fetch(`${API}/policies`)
+      .then(r => r.json())
+      .then(data => setUploadedPolicies(data))
+      .catch(() => setUploadedPolicies([]));
+  }, []);
+
+  // Combine default policies with uploaded ones
+  const allPolicies = uploadedPolicies.length > 0 
+    ? uploadedPolicies.map(p => ({
+        ...p,
+        icon: p.category === 'governance' ? Scale : 
+              p.category === 'compliance' ? Shield : 
+              p.category === 'conduct' ? Users : FileText
+      }))
+    : policies;
+
   return (
     <div data-testid="about-kogl-page">
       {/* Hero */}
