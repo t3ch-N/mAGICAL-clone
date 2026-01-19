@@ -82,3 +82,23 @@ Build a professional international golf tournament website and digital operation
 - Backend: 94.4% pass rate
 - Frontend: 100% pass rate
 - Overall: 98.2% success
+
+## Update Log - January 2026
+
+### Features Added (V1.1)
+- ✅ **Image Upload System**: Admin can upload images via Media Library for use in news/gallery
+- ✅ **2026 Tournament Update**: February 19-22, 2026 at Karen Country Club (Par 72, 6,818 yards)
+- ✅ **KOGL Page Enhancement**: Added Governance, Board, Policies, Partners tabs
+- ✅ **Social Media Links**: Facebook, Twitter, Instagram, YouTube, LinkedIn in footer
+- ✅ **Admin Login Link**: Visible in footer for easy access
+
+### Backend Endpoints Added
+- `POST /api/admin/upload` - Upload images
+- `GET /api/uploads/{filename}` - Serve uploaded files
+- `GET /api/admin/uploads` - List all uploads
+- `DELETE /api/admin/uploads/{filename}` - Delete upload
+
+### Testing Results (V1.1)
+- Backend: 94.4% pass rate
+- Frontend: 100% pass rate
+- Overall: 98.2% success
