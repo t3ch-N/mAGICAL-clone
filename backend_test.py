@@ -338,6 +338,8 @@ class MagicalKenyaOpenAPITester:
         self.test_gallery_endpoints()
         self.test_tickets_endpoints()
         self.test_contact_endpoints()
+        self.test_policies_endpoints()
+        self.test_upload_endpoints_without_auth()
         self.test_auth_endpoints_without_token()
         
         # Print summary
