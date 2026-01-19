@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Link } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { API } from '../App';
 import { 
   Building2,
   Target,
@@ -17,7 +18,8 @@ import {
   BookOpen,
   Briefcase,
   ChevronRight,
-  Download
+  Download,
+  ExternalLink
 } from 'lucide-react';
 
 const KOGL_BG = "https://images.pexels.com/photos/1325744/pexels-photo-1325744.jpeg";
