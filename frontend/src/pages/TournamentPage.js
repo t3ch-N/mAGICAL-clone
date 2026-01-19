@@ -126,7 +126,7 @@ export default function TournamentPage() {
                       <h3 className="font-heading text-xl font-bold mb-2">Defending Champion</h3>
                       <p className="text-muted-foreground font-body">
                         {info?.defending_champion || 'Guido Migliozzi'} returns to defend his title 
-                        at the 2025 Magical Kenya Open.
+                        at the 2026 Magical Kenya Open.
                       </p>
                     </CardContent>
                   </Card>
@@ -137,12 +137,12 @@ export default function TournamentPage() {
             <TabsContent value="course" data-testid="tab-course">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
                 <div>
-                  <h2 className="font-heading text-3xl font-bold mb-6">Muthaiga Golf Club</h2>
+                  <h2 className="font-heading text-3xl font-bold mb-6">Karen Country Club</h2>
                   <div className="prose prose-lg font-body text-muted-foreground">
                     <p className="mb-4">
-                      Muthaiga Golf Club, established in 1913, is one of Kenya's most prestigious 
-                      golf courses. Located in the leafy suburbs of Nairobi, the club offers a 
-                      challenging yet fair test of golf.
+                      Karen Country Club, established in 1937, is one of Kenya's most prestigious 
+                      golf courses. Located in the beautiful Karen suburb of Nairobi, the club offers a 
+                      championship-caliber test of golf in stunning surroundings.
                     </p>
                     <p className="mb-4">
                       The course features beautifully manicured fairways lined with indigenous 
