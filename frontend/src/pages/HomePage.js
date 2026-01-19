@@ -21,8 +21,14 @@ import {
 
 // Logo URLs
 const MKO_LOGO = "https://customer-assets.emergentagent.com/job_kenya-golf-tourney/artifacts/n9g48emm_MKO%20logo.jpeg";
-const DP_WORLD_TOUR_LOGO = "https://upload.wikimedia.org/wikipedia/en/thumb/9/9e/DP_World_Tour_logo.svg/1200px-DP_World_Tour_logo.svg.png";
+const DP_WORLD_TOUR_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/h2va547a_DPWORLD%20LOGO.jpg";
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_kenya-golf-tourney/artifacts/ch5rc2h4_KENYA%20OPEN%20LOGO_250724_100403.pdf";
+
+// Partner & Sponsor Logos
+const MINISTRY_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/q0qxyns1_MINISTRY.png";
+const ABSA_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/2h0ry18x_ABSA%20KENYA.jpg";
+const JOHNNIE_WALKER_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/0cc2631j_JOHNYWALKER%20LOGO.jpg";
+const SPORTPESA_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/0baz3u7v_SPORTS%20PESA.png";
 
 // Hero backgrounds
 const HERO_IMAGES = [
