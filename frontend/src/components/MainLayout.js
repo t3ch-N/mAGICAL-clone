@@ -239,7 +239,6 @@ export default function MainLayout() {
                       Register
                       <span className="ml-2 text-[10px] bg-white/20 px-1.5 py-0.5 rounded">Coming Soon</span>
                     </Button>
-                    </Link>
                   )}
                 </div>
               </nav>
