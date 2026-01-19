@@ -278,13 +278,15 @@ export default function HomePage() {
 
   return (
     <div data-testid="home-page">
-      {/* Official Partners Banner */}
+      {/* Top Banner with DP World Tour and KOGL */}
       <div className="bg-white border-b border-border/40 py-3">
-        <div className="container-custom flex items-center justify-center gap-6 md:gap-12">
-          <span className="text-xs uppercase tracking-widest text-muted-foreground hidden md:block">Official Partners</span>
-          <img src={DP_WORLD_TOUR_LOGO} alt="DP World Tour" className="h-10 md:h-14 w-auto object-contain" />
-          <div className="h-10 md:h-14 w-px bg-border/60 hidden md:block" />
-          <img src={MINISTRY_LOGO} alt="Ministry of Youth Affairs, Creative Economy and Sports" className="h-10 md:h-14 w-auto object-contain" />
+        <div className="container-custom flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <img src={DP_WORLD_TOUR_LOGO} alt="DP World Tour" className="h-10 md:h-14 w-auto object-contain" />
+          </div>
+          <div className="flex items-center gap-3">
+            <img src={KOGL_LOGO} alt="Kenya Open Golf Limited" className="h-10 md:h-14 w-auto object-contain" />
+          </div>
         </div>
       </div>
 
