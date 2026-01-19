@@ -164,11 +164,10 @@ export default function MainLayout() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
-                <Link to="/registration">
-                  <Button className="btn-primary" data-testid="register-button">
-                    Register
-                  </Button>
-                </Link>
+                <Button className="btn-primary opacity-75 cursor-not-allowed" disabled data-testid="register-button">
+                  Register
+                  <span className="ml-2 text-[10px] bg-white/20 px-1.5 py-0.5 rounded">Soon</span>
+                </Button>
               )}
             </div>
 
