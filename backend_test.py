@@ -241,6 +241,65 @@ class MagicalKenyaOpenAPITester:
         except Exception as e:
             self.log_result("Submit Contact Form", False, "/contact", 0, "public_endpoints", str(e))
 
+    def test_policies_endpoints(self):
+        """Test policy document endpoints"""
+        print("\n🔍 Testing Policy Document Endpoints...")
+        
+        # Get policies (public endpoint)
+        try:
+            response = requests.get(f"{self.api_url}/policies", timeout=10)
+            success = response.status_code == 200
+            if success:
+                policies_data = response.json()
+                print(f"   📊 Found {len(policies_data)} policy documents")
+            self.log_result("Get Policies", success, "/policies", response.status_code, "data_endpoints")
+        except Exception as e:
+            self.log_result("Get Policies", False, "/policies", 0, "data_endpoints", str(e))
+
+        # Test policies with category filter
+        try:
+            response = requests.get(f"{self.api_url}/policies?category=governance", timeout=10)
+            success = response.status_code == 200
+            self.log_result("Get Policies (Filtered)", success, "/policies?category=governance", response.status_code, "data_endpoints")
+        except Exception as e:
+            self.log_result("Get Policies (Filtered)", False, "/policies?category=governance", 0, "data_endpoints", str(e))
+
+    def test_upload_endpoints_without_auth(self):
+        """Test upload endpoints without authentication (should fail appropriately)"""
+        print("\n🔍 Testing Upload Endpoints (Unauthenticated)...")
+        
+        # Test image upload without auth (should return 401)
+        try:
+            response = requests.post(f"{self.api_url}/admin/upload", timeout=10)
+            success = response.status_code == 401
+            self.log_result("Image Upload (No Auth)", success, "/admin/upload", response.status_code, "auth_endpoints")
+        except Exception as e:
+            self.log_result("Image Upload (No Auth)", False, "/admin/upload", 0, "auth_endpoints", str(e))
+
+        # Test policy upload without auth (should return 401)
+        try:
+            response = requests.post(f"{self.api_url}/admin/policies/upload", timeout=10)
+            success = response.status_code == 401
+            self.log_result("Policy Upload (No Auth)", success, "/admin/policies/upload", response.status_code, "auth_endpoints")
+        except Exception as e:
+            self.log_result("Policy Upload (No Auth)", False, "/admin/policies/upload", 0, "auth_endpoints", str(e))
+
+        # Test admin policies list without auth (should return 401)
+        try:
+            response = requests.get(f"{self.api_url}/admin/policies", timeout=10)
+            success = response.status_code == 401
+            self.log_result("Admin Policies List (No Auth)", success, "/admin/policies", response.status_code, "auth_endpoints")
+        except Exception as e:
+            self.log_result("Admin Policies List (No Auth)", False, "/admin/policies", 0, "auth_endpoints", str(e))
+
+        # Test admin uploads list without auth (should return 401)
+        try:
+            response = requests.get(f"{self.api_url}/admin/uploads", timeout=10)
+            success = response.status_code == 401
+            self.log_result("Admin Uploads List (No Auth)", success, "/admin/uploads", response.status_code, "auth_endpoints")
+        except Exception as e:
+            self.log_result("Admin Uploads List (No Auth)", False, "/admin/uploads", 0, "auth_endpoints", str(e))
+
     def test_auth_endpoints_without_token(self):
         """Test auth endpoints without authentication (should fail appropriately)"""
         print("\n🔍 Testing Auth Endpoints (Unauthenticated)...")
