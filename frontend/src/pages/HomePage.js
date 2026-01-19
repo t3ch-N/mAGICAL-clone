@@ -635,6 +635,11 @@ export default function HomePage() {
           </h3>
           <div className="flex flex-wrap justify-center items-center gap-8 md:gap-14">
             <img 
+              src={DPWORLD_SPONSOR_LOGO} 
+              alt="DP World"
+              className="h-12 md:h-16 w-auto object-contain"
+            />
+            <img 
               src={ABSA_LOGO} 
               alt="ABSA Kenya"
               className="h-12 md:h-16 w-auto object-contain"
