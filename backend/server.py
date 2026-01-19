@@ -30,6 +30,10 @@ app = FastAPI(title="Magical Kenya Open API")
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# Create uploads directory
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
