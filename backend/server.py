@@ -992,6 +992,111 @@ async def delete_upload(request: Request, filename: str):
     filepath.unlink()
     return {"message": "File deleted successfully"}
 
+# ===================== POLICY DOCUMENTS =====================
+class PolicyDocument(BaseModel):
+    policy_id: str = Field(default_factory=lambda: f"policy_{uuid.uuid4().hex[:12]}")
+    title: str
+    description: str
+    filename: str
+    file_url: str
+    category: str = "general"  # governance, compliance, conduct, other
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+
+@api_router.post("/admin/policies/upload")
+async def upload_policy(request: Request, file: UploadFile = File(...), title: str = "", description: str = "", category: str = "general"):
+    """Upload policy PDF document (admin only)"""
+    await require_admin(request)
+    
+    # Validate file type
+    allowed_types = ["application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PDF files allowed.")
+    
+    # Generate unique filename
+    original_name = file.filename.replace(" ", "_")
+    filename = f"{uuid.uuid4().hex[:8]}_{original_name}"
+    filepath = POLICIES_DIR / filename
+    
+    # Save file
+    async with aiofiles.open(filepath, 'wb') as out_file:
+        content = await file.read()
+        await out_file.write(content)
+    
+    # Create policy record
+    policy = PolicyDocument(
+        title=title or file.filename.replace(".pdf", "").replace("_", " "),
+        description=description,
+        filename=filename,
+        file_url=f"/api/policies/{filename}",
+        category=category
+    )
+    
+    policy_dict = policy.model_dump()
+    policy_dict["created_at"] = policy_dict["created_at"].isoformat()
+    await db.policies.insert_one(policy_dict)
+    
+    return {
+        "policy_id": policy.policy_id,
+        "filename": filename,
+        "url": f"/api/policies/{filename}",
+        "title": policy.title
+    }
+
+@api_router.get("/policies")
+async def list_policies(category: Optional[str] = None):
+    """List all active policy documents"""
+    query = {"is_active": True}
+    if category:
+        query["category"] = category
+    
+    policies = await db.policies.find(query, {"_id": 0}).to_list(100)
+    return policies
+
+@api_router.get("/policies/{filename}")
+async def get_policy_file(filename: str):
+    """Serve policy PDF files"""
+    filepath = POLICIES_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath, media_type="application/pdf", filename=filename)
+
+@api_router.get("/admin/policies")
+async def admin_list_policies(request: Request):
+    """List all policy documents (admin only)"""
+    await require_admin(request)
+    
+    policies = await db.policies.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return policies
+
+@api_router.delete("/admin/policies/{policy_id}")
+async def delete_policy(request: Request, policy_id: str):
+    """Delete policy document (admin only)"""
+    await require_admin(request)
+    
+    policy = await db.policies.find_one({"policy_id": policy_id}, {"_id": 0})
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    # Delete file
+    filepath = POLICIES_DIR / policy["filename"]
+    if filepath.exists():
+        filepath.unlink()
+    
+    # Delete record
+    await db.policies.delete_one({"policy_id": policy_id})
+    return {"message": "Policy deleted successfully"}
+
+@api_router.put("/admin/policies/{policy_id}")
+async def update_policy(request: Request, policy_id: str, update: dict):
+    """Update policy document metadata (admin only)"""
+    await require_admin(request)
+    
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.policies.update_one({"policy_id": policy_id}, {"$set": update})
+    return {"message": "Policy updated successfully"}
+
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
 async def root():
