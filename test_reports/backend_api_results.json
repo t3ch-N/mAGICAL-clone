@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-01-19T14:31:15.922377",
-  "total_tests": 18,
-  "passed_tests": 17,
-  "failed_tests": 1,
-  "success_rate": 94.44444444444444,
+  "timestamp": "2026-01-19T14:57:28.832687",
+  "total_tests": 24,
+  "passed_tests": 21,
+  "failed_tests": 3,
+  "success_rate": 87.5,
   "results": {
     "public_endpoints": [
       {
@@ -36,6 +36,34 @@
       }
     ],
     "auth_endpoints": [
+      {
+        "test": "Image Upload (No Auth)",
+        "endpoint": "/admin/upload",
+        "success": false,
+        "status_code": 422,
+        "error": null
+      },
+      {
+        "test": "Policy Upload (No Auth)",
+        "endpoint": "/admin/policies/upload",
+        "success": false,
+        "status_code": 422,
+        "error": null
+      },
+      {
+        "test": "Admin Policies List (No Auth)",
+        "endpoint": "/admin/policies",
+        "success": true,
+        "status_code": 401,
+        "error": null
+      },
+      {
+        "test": "Admin Uploads List (No Auth)",
+        "endpoint": "/admin/uploads",
+        "success": true,
+        "status_code": 401,
+        "error": null
+      },
       {
         "test": "Get Current User (No Auth)",
         "endpoint": "/auth/me",
@@ -136,10 +164,36 @@
         "success": true,
         "status_code": 200,
         "error": null
+      },
+      {
+        "test": "Get Policies",
+        "endpoint": "/policies",
+        "success": true,
+        "status_code": 200,
+        "error": null
+      },
+      {
+        "test": "Get Policies (Filtered)",
+        "endpoint": "/policies?category=governance",
+        "success": true,
+        "status_code": 200,
+        "error": null
       }
     ]
   },
   "failed_details": [
+    {
+      "test": "Image Upload (No Auth)",
+      "endpoint": "/admin/upload",
+      "status_code": 422,
+      "error": null
+    },
+    {
+      "test": "Policy Upload (No Auth)",
+      "endpoint": "/admin/policies/upload",
+      "status_code": 422,
+      "error": null
+    },
     {
       "test": "Request Role (No Auth)",
       "endpoint": "/auth/request-role",
