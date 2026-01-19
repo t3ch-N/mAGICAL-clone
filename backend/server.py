@@ -687,17 +687,17 @@ async def get_tournament_info():
     """Get tournament information"""
     info = await db.tournament_info.find_one({}, {"_id": 0})
     if not info:
-        # Return default info
+        # Return default info - 2026 event at Karen Country Club
         return {
             "name": "Magical Kenya Open",
-            "year": 2025,
-            "dates": "March 6-9, 2025",
-            "venue": "Muthaiga Golf Club",
+            "year": 2026,
+            "dates": "February 19-22, 2026",
+            "venue": "Karen Country Club",
             "location": "Nairobi, Kenya",
             "purse": "$2,000,000",
             "defending_champion": "Guido Migliozzi",
-            "course_par": 71,
-            "course_yards": 6902
+            "course_par": 72,
+            "course_yards": 6818
         }
     return info
 
@@ -707,10 +707,10 @@ async def get_tournament_schedule():
     schedule = await db.tournament_schedule.find({}, {"_id": 0}).to_list(100)
     if not schedule:
         return [
-            {"day": "Thursday", "date": "March 6", "event": "Round 1", "time": "07:00 - 18:00"},
-            {"day": "Friday", "date": "March 7", "event": "Round 2", "time": "07:00 - 18:00"},
-            {"day": "Saturday", "date": "March 8", "event": "Round 3", "time": "08:00 - 17:00"},
-            {"day": "Sunday", "date": "March 9", "event": "Final Round", "time": "08:00 - 17:00"}
+            {"day": "Thursday", "date": "February 19", "event": "Round 1", "time": "07:00 - 18:00"},
+            {"day": "Friday", "date": "February 20", "event": "Round 2", "time": "07:00 - 18:00"},
+            {"day": "Saturday", "date": "February 21", "event": "Round 3", "time": "08:00 - 17:00"},
+            {"day": "Sunday", "date": "February 22", "event": "Final Round", "time": "08:00 - 17:00"}
         ]
     return schedule
 
@@ -720,6 +720,7 @@ async def get_past_winners():
     winners = await db.past_winners.find({}, {"_id": 0}).sort("year", -1).to_list(100)
     if not winners:
         return [
+            {"year": 2025, "winner": "TBD", "country": "", "score": ""},
             {"year": 2024, "winner": "Guido Migliozzi", "country": "Italy", "score": "-17"},
             {"year": 2023, "winner": "Ewen Ferguson", "country": "Scotland", "score": "-21"},
             {"year": 2022, "winner": "Justin Harding", "country": "South Africa", "score": "-16"},
@@ -728,6 +729,71 @@ async def get_past_winners():
             {"year": 2019, "winner": "Guido Migliozzi", "country": "Italy", "score": "-22"}
         ]
     return winners
+
+# ===================== IMAGE UPLOAD =====================
+@api_router.post("/admin/upload")
+async def upload_image(request: Request, file: UploadFile = File(...)):
+    """Upload image file (admin only)"""
+    await require_admin(request)
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, GIF, WebP allowed.")
+    
+    # Generate unique filename
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = UPLOAD_DIR / filename
+    
+    # Save file
+    async with aiofiles.open(filepath, 'wb') as out_file:
+        content = await file.read()
+        await out_file.write(content)
+    
+    # Return URL
+    return {
+        "filename": filename,
+        "url": f"/api/uploads/{filename}",
+        "content_type": file.content_type
+    }
+
+@api_router.get("/uploads/{filename}")
+async def get_uploaded_file(filename: str):
+    """Serve uploaded files"""
+    filepath = UPLOAD_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath)
+
+@api_router.get("/admin/uploads")
+async def list_uploads(request: Request):
+    """List all uploaded files (admin only)"""
+    await require_admin(request)
+    
+    files = []
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file():
+            files.append({
+                "filename": f.name,
+                "url": f"/api/uploads/{f.name}",
+                "size": f.stat().st_size,
+                "created": datetime.fromtimestamp(f.stat().st_ctime, tz=timezone.utc).isoformat()
+            })
+    
+    return sorted(files, key=lambda x: x["created"], reverse=True)
+
+@api_router.delete("/admin/uploads/{filename}")
+async def delete_upload(request: Request, filename: str):
+    """Delete uploaded file (admin only)"""
+    await require_admin(request)
+    
+    filepath = UPLOAD_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    filepath.unlink()
+    return {"message": "File deleted successfully"}
 
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
