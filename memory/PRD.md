@@ -102,3 +102,28 @@ Build a professional international golf tournament website and digital operation
 - Backend: 94.4% pass rate
 - Frontend: 100% pass rate
 - Overall: 98.2% success
+
+### Features Added (V1.2)
+- ✅ **Email Notifications**: System ready for Gmail SMTP (add credentials to enable)
+  - Sends approval email when user registration is approved
+  - Sends rejection email when user registration is rejected
+- ✅ **Policy Document Management**: Admin can upload/manage PDF policies
+  - Upload PDFs via Admin Dashboard → Policies section
+  - Policies display on public KOGL page with download links
+  - Category support: Governance, Compliance, Conduct, General, Other
+- ✅ **Enhanced Admin Dashboard**: 
+  - Media section for image uploads
+  - Policies section for PDF uploads
+  - Both integrated into admin navigation
+
+### To Enable Email Notifications
+Add to `/app/backend/.env`:
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-gmail@gmail.com
+SMTP_PASSWORD=your-16-char-app-password
+SMTP_FROM_EMAIL=your-gmail@gmail.com
+SMTP_FROM_NAME=Magical Kenya Open
+```
+Then restart backend: `sudo supervisorctl restart backend`
