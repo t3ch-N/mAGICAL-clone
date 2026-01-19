@@ -180,6 +180,12 @@ export default function AboutKOGLPage() {
         <div className="container-custom">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
             <div>
+              {/* KOGL Logo */}
+              <img 
+                src={KOGL_LOGO} 
+                alt="Kenya Open Golf Limited" 
+                className="h-24 md:h-32 w-auto object-contain mb-8"
+              />
               <h2 className="font-heading text-3xl md:text-4xl font-bold mb-6">
                 About KOGL
               </h2>
