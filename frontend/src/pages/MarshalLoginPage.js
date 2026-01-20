@@ -19,15 +19,28 @@ export default function MarshalLoginPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check if already logged in
-    fetch(`${API}/marshal/me`, { credentials: 'include' })
-      .then(r => {
-        if (r.ok) {
-          navigate('/marshal-dashboard');
-        }
+    // Check if already logged in via localStorage
+    const session = localStorage.getItem('marshal_session');
+    if (session) {
+      fetch(`${API}/marshal/me`, {
+        headers: { 'Authorization': `Bearer ${session}` }
       })
-      .catch(() => {})
-      .finally(() => setCheckingAuth(false));
+        .then(r => {
+          if (r.ok) {
+            navigate('/marshal-dashboard');
+          } else {
+            localStorage.removeItem('marshal_session');
+            localStorage.removeItem('marshal_user');
+          }
+        })
+        .catch(() => {
+          localStorage.removeItem('marshal_session');
+          localStorage.removeItem('marshal_user');
+        })
+        .finally(() => setCheckingAuth(false));
+    } else {
+      setCheckingAuth(false);
+    }
   }, [navigate]);
 
   const handleSubmit = async (e) => {
@@ -43,7 +56,6 @@ export default function MarshalLoginPage() {
       const response = await fetch(`${API}/marshal/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ username, password })
       });
 
