@@ -452,8 +452,11 @@ class VolunteerUpdate(BaseModel):
 # ===================== MARSHAL AUTH MODELS =====================
 class MarshalRole(str, Enum):
     CHIEF_MARSHAL = "chief_marshal"
+    TOURNAMENT_DIRECTOR = "tournament_director"
+    OPERATIONS_MANAGER = "operations_manager"
     AREA_SUPERVISOR = "area_supervisor"
     ADMIN = "admin"
+    COORDINATOR = "coordinator"
     VIEWER = "viewer"
 
 class MarshalUser(BaseModel):
@@ -471,6 +474,12 @@ class MarshalUserCreate(BaseModel):
     password: str
     full_name: str
     role: str
+
+class MarshalUserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = None  # Optional password reset
 
 class MarshalLogin(BaseModel):
     username: str
