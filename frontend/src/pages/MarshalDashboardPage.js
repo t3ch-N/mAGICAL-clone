@@ -7,7 +7,9 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import { Checkbox } from '../components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Textarea } from "../components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -31,7 +33,6 @@ import {
   Download, 
   LogOut,
   Search,
-  Filter,
   CheckCircle2,
   XCircle,
   Clock,
@@ -43,16 +44,25 @@ import {
   Edit,
   UserCheck,
   UserX,
-  MapPin,
-  RefreshCw
+  RefreshCw,
+  FileText,
+  Plus,
+  Trash2,
+  GripVertical,
+  ToggleLeft,
+  ToggleRight,
+  Key
 } from 'lucide-react';
 
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
 
 const roleLabels = {
   chief_marshal: 'Chief Marshal',
+  tournament_director: 'Tournament Director',
+  operations_manager: 'Operations Manager',
   area_supervisor: 'Area Supervisor',
   admin: 'Admin',
+  coordinator: 'Coordinator',
   viewer: 'Viewer'
 };
 
@@ -75,6 +85,18 @@ const tournamentDates = [
   { value: '2026-02-22', label: 'Sunday, Feb 22' }
 ];
 
+const fieldTypes = [
+  { value: 'text', label: 'Text' },
+  { value: 'email', label: 'Email' },
+  { value: 'phone', label: 'Phone' },
+  { value: 'number', label: 'Number' },
+  { value: 'select', label: 'Dropdown' },
+  { value: 'multiselect', label: 'Multi-Select' },
+  { value: 'checkbox', label: 'Checkbox' },
+  { value: 'textarea', label: 'Text Area' },
+  { value: 'date', label: 'Date' }
+];
+
 export default function MarshalDashboardPage() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +108,8 @@ export default function MarshalDashboardPage() {
   const [volunteers, setVolunteers] = useState([]);
   const [filteredVolunteers, setFilteredVolunteers] = useState([]);
   const [marshalUsers, setMarshalUsers] = useState([]);
+  const [availableRoles, setAvailableRoles] = useState([]);
+  const [forms, setForms] = useState([]);
   
   // Filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -96,7 +120,12 @@ export default function MarshalDashboardPage() {
   const [selectedVolunteer, setSelectedVolunteer] = useState(null);
   const [showVolunteerModal, setShowVolunteerModal] = useState(false);
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
-  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [showFormModal, setShowFormModal] = useState(false);
+  const [showFieldModal, setShowFieldModal] = useState(false);
+  const [selectedForm, setSelectedForm] = useState(null);
+  const [selectedField, setSelectedField] = useState(null);
   
   // Attendance states
   const [attendanceDate, setAttendanceDate] = useState(tournamentDates[0].value);
@@ -104,6 +133,20 @@ export default function MarshalDashboardPage() {
   
   // New user form
   const [newUser, setNewUser] = useState({ username: '', password: '', full_name: '', role: 'viewer' });
+  
+  // Edit user form
+  const [editUser, setEditUser] = useState({ full_name: '', role: '', is_active: true, password: '' });
+  
+  // Form builder state
+  const [newForm, setNewForm] = useState({ name: '', description: '', is_active: true });
+  const [newField, setNewField] = useState({ 
+    name: '', label: '', field_type: 'text', required: false, is_active: true, options: '', placeholder: '', help_text: '' 
+  });
+
+  const getAuthHeaders = () => {
+    const sessionId = localStorage.getItem('marshal_session');
+    return { 'Authorization': `Bearer ${sessionId}` };
+  };
 
   // Auth check
   useEffect(() => {
@@ -116,8 +159,7 @@ export default function MarshalDashboardPage() {
 
       try {
         const response = await fetch(`${API}/marshal/me`, {
-          
-          headers: { 'Authorization': `Bearer ${sessionId}` }
+          headers: getAuthHeaders()
         });
         
         if (response.ok) {
@@ -140,13 +182,12 @@ export default function MarshalDashboardPage() {
 
   // Fetch data
   const fetchData = useCallback(async () => {
-    const sessionId = localStorage.getItem('marshal_session');
-    const headers = { 'Authorization': `Bearer ${sessionId}` };
+    const headers = getAuthHeaders();
     
     try {
       const [statsRes, volunteersRes] = await Promise.all([
-        fetch(`${API}/marshal/stats`, { headers,  }),
-        fetch(`${API}/marshal/volunteers`, { headers,  })
+        fetch(`${API}/marshal/stats`, { headers }),
+        fetch(`${API}/marshal/volunteers`, { headers })
       ]);
       
       if (statsRes.ok) setStats(await statsRes.json());
@@ -193,11 +234,9 @@ export default function MarshalDashboardPage() {
 
   // Fetch attendance data
   const fetchAttendance = async (date) => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
       const response = await fetch(`${API}/marshal/attendance/${date}`, {
-        headers: { 'Authorization': `Bearer ${sessionId}` },
-        
+        headers: getAuthHeaders()
       });
       if (response.ok) {
         setAttendanceData(await response.json());
@@ -213,16 +252,17 @@ export default function MarshalDashboardPage() {
     }
   }, [activeTab, attendanceDate]);
 
-  // Fetch marshal users
+  // Fetch marshal users and roles
   const fetchMarshalUsers = async () => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
-      const response = await fetch(`${API}/marshal/users`, {
-        headers: { 'Authorization': `Bearer ${sessionId}` },
-        
-      });
-      if (response.ok) {
-        setMarshalUsers(await response.json());
+      const [usersRes, rolesRes] = await Promise.all([
+        fetch(`${API}/marshal/users`, { headers: getAuthHeaders() }),
+        fetch(`${API}/marshal/roles`, { headers: getAuthHeaders() })
+      ]);
+      if (usersRes.ok) setMarshalUsers(await usersRes.json());
+      if (rolesRes.ok) {
+        const data = await rolesRes.json();
+        setAvailableRoles(data.roles || []);
       }
     } catch (error) {
       console.error('Failed to fetch users:', error);
@@ -230,18 +270,32 @@ export default function MarshalDashboardPage() {
   };
 
   useEffect(() => {
-    if (activeTab === 'users' && user?.role === 'chief_marshal') {
+    if (activeTab === 'users' && (user?.role === 'chief_marshal' || user?.role === 'tournament_director')) {
       fetchMarshalUsers();
     }
   }, [activeTab, user]);
 
+  // Fetch forms
+  const fetchForms = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/forms`, { headers: getAuthHeaders() });
+      if (response.ok) setForms(await response.json());
+    } catch (error) {
+      console.error('Failed to fetch forms:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'forms') {
+      fetchForms();
+    }
+  }, [activeTab]);
+
   // Actions
   const handleLogout = async () => {
-    const sessionId = localStorage.getItem('marshal_session');
     await fetch(`${API}/marshal/logout`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${sessionId}` },
-      
+      headers: getAuthHeaders()
     });
     localStorage.removeItem('marshal_session');
     localStorage.removeItem('marshal_user');
@@ -249,12 +303,10 @@ export default function MarshalDashboardPage() {
   };
 
   const handleApprove = async (volunteerId) => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
       const response = await fetch(`${API}/marshal/volunteers/${volunteerId}/approve`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${sessionId}` },
-        
+        headers: getAuthHeaders()
       });
       if (response.ok) {
         toast.success('Volunteer approved');
@@ -266,12 +318,10 @@ export default function MarshalDashboardPage() {
   };
 
   const handleReject = async (volunteerId) => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
       const response = await fetch(`${API}/marshal/volunteers/${volunteerId}/reject`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${sessionId}` },
-        
+        headers: getAuthHeaders()
       });
       if (response.ok) {
         toast.success('Volunteer rejected');
@@ -283,15 +333,10 @@ export default function MarshalDashboardPage() {
   };
 
   const handleMarkAttendance = async (volunteerId, status) => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
       const response = await fetch(`${API}/marshal/attendance`, {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${sessionId}`,
-          'Content-Type': 'application/json'
-        },
-        
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           volunteer_id: volunteerId,
           date: attendanceDate,
@@ -308,15 +353,10 @@ export default function MarshalDashboardPage() {
   };
 
   const handleCreateUser = async () => {
-    const sessionId = localStorage.getItem('marshal_session');
     try {
       const response = await fetch(`${API}/marshal/users`, {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${sessionId}`,
-          'Content-Type': 'application/json'
-        },
-        
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser)
       });
       if (response.ok) {
@@ -333,17 +373,181 @@ export default function MarshalDashboardPage() {
     }
   };
 
+  const handleEditUser = async () => {
+    if (!selectedUser) return;
+    try {
+      const updateData = { ...editUser };
+      if (!updateData.password) delete updateData.password;
+      
+      const response = await fetch(`${API}/marshal/users/${selectedUser.marshal_id}`, {
+        method: 'PUT',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+      });
+      if (response.ok) {
+        toast.success('User updated successfully');
+        setShowEditUserModal(false);
+        setSelectedUser(null);
+        fetchMarshalUsers();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Failed to update user');
+      }
+    } catch {
+      toast.error('Failed to update user');
+    }
+  };
+
+  const handleDeleteUser = async (marshalId) => {
+    if (!confirm('Are you sure you want to delete this user?')) return;
+    try {
+      const response = await fetch(`${API}/marshal/users/${marshalId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (response.ok) {
+        toast.success('User deleted');
+        fetchMarshalUsers();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Failed to delete user');
+      }
+    } catch {
+      toast.error('Failed to delete user');
+    }
+  };
+
+  const openEditUser = (u) => {
+    setSelectedUser(u);
+    setEditUser({
+      full_name: u.full_name,
+      role: u.role,
+      is_active: u.is_active,
+      password: ''
+    });
+    setShowEditUserModal(true);
+  };
+
+  // Form builder actions
+  const handleCreateForm = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/forms`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(newForm)
+      });
+      if (response.ok) {
+        toast.success('Form created successfully');
+        setShowFormModal(false);
+        setNewForm({ name: '', description: '', is_active: true });
+        fetchForms();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Failed to create form');
+      }
+    } catch {
+      toast.error('Failed to create form');
+    }
+  };
+
+  const handleUpdateForm = async (formId, updates) => {
+    try {
+      const response = await fetch(`${API}/marshal/forms/${formId}`, {
+        method: 'PUT',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (response.ok) {
+        toast.success('Form updated');
+        fetchForms();
+      }
+    } catch {
+      toast.error('Failed to update form');
+    }
+  };
+
+  const handleDeleteForm = async (formId) => {
+    if (!confirm('Are you sure you want to delete this form?')) return;
+    try {
+      const response = await fetch(`${API}/marshal/forms/${formId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (response.ok) {
+        toast.success('Form deleted');
+        fetchForms();
+      }
+    } catch {
+      toast.error('Failed to delete form');
+    }
+  };
+
+  const handleAddField = async () => {
+    if (!selectedForm) return;
+    try {
+      const fieldData = {
+        ...newField,
+        options: newField.options ? newField.options.split(',').map(o => o.trim()).filter(o => o) : []
+      };
+      const response = await fetch(`${API}/marshal/forms/${selectedForm.form_id}/fields`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(fieldData)
+      });
+      if (response.ok) {
+        toast.success('Field added');
+        setShowFieldModal(false);
+        setNewField({ name: '', label: '', field_type: 'text', required: false, is_active: true, options: '', placeholder: '', help_text: '' });
+        fetchForms();
+      }
+    } catch {
+      toast.error('Failed to add field');
+    }
+  };
+
+  const handleUpdateField = async (formId, fieldId, updates) => {
+    try {
+      const response = await fetch(`${API}/marshal/forms/${formId}/fields/${fieldId}`, {
+        method: 'PUT',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (response.ok) {
+        toast.success('Field updated');
+        fetchForms();
+      }
+    } catch {
+      toast.error('Failed to update field');
+    }
+  };
+
+  const handleDeleteField = async (formId, fieldId) => {
+    if (!confirm('Delete this field?')) return;
+    try {
+      const response = await fetch(`${API}/marshal/forms/${formId}/fields/${fieldId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (response.ok) {
+        toast.success('Field deleted');
+        fetchForms();
+      }
+    } catch {
+      toast.error('Failed to delete field');
+    }
+  };
+
   const handleExportVolunteers = () => {
-    const sessionId = localStorage.getItem('marshal_session');
     window.open(`${API}/marshal/export/volunteers?format=csv`, '_blank');
   };
 
   const handleExportAttendance = () => {
-    const sessionId = localStorage.getItem('marshal_session');
     window.open(`${API}/marshal/export/attendance/${attendanceDate}`, '_blank');
   };
 
-  const canEdit = user?.role === 'chief_marshal' || user?.role === 'admin';
+  const canEdit = ['chief_marshal', 'admin', 'tournament_director', 'operations_manager'].includes(user?.role);
+  const canManageUsers = ['chief_marshal', 'tournament_director'].includes(user?.role);
+  const canManageForms = ['chief_marshal', 'admin', 'tournament_director'].includes(user?.role);
   const canMarkAttendance = user?.role !== 'viewer';
 
   if (loading) {
@@ -374,7 +578,7 @@ export default function MarshalDashboardPage() {
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
               <p className="text-sm font-medium">{user?.full_name}</p>
-              <Badge variant="secondary" className="text-xs">{roleLabels[user?.role]}</Badge>
+              <Badge variant="secondary" className="text-xs">{roleLabels[user?.role] || user?.role}</Badge>
             </div>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="text-primary-foreground">
               <LogOut className="w-4 h-4" />
@@ -386,7 +590,7 @@ export default function MarshalDashboardPage() {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6 bg-white">
+          <TabsList className="mb-6 bg-white flex-wrap">
             <TabsTrigger value="overview" className="gap-2">
               <BarChart3 className="w-4 h-4" /> Overview
             </TabsTrigger>
@@ -396,7 +600,12 @@ export default function MarshalDashboardPage() {
             <TabsTrigger value="attendance" className="gap-2">
               <ClipboardCheck className="w-4 h-4" /> Attendance
             </TabsTrigger>
-            {user?.role === 'chief_marshal' && (
+            {canManageForms && (
+              <TabsTrigger value="forms" className="gap-2">
+                <FileText className="w-4 h-4" /> Forms
+              </TabsTrigger>
+            )}
+            {canManageUsers && (
               <TabsTrigger value="users" className="gap-2">
                 <Settings className="w-4 h-4" /> Users
               </TabsTrigger>
@@ -746,8 +955,114 @@ export default function MarshalDashboardPage() {
             </Card>
           </TabsContent>
 
-          {/* Users Tab (Chief Marshal only) */}
-          {user?.role === 'chief_marshal' && (
+          {/* Forms Tab */}
+          {canManageForms && (
+            <TabsContent value="forms">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Registration Forms</CardTitle>
+                    <Button onClick={() => setShowFormModal(true)}>
+                      <Plus className="w-4 h-4 mr-2" /> Create Form
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {forms.map((form) => (
+                      <Card key={form.form_id} className="border">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <CardTitle className="text-lg">{form.name}</CardTitle>
+                              <Badge className={form.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}>
+                                {form.is_active ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => handleUpdateForm(form.form_id, { is_active: !form.is_active })}
+                              >
+                                {form.is_active ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => { setSelectedForm(form); setShowFieldModal(true); }}
+                              >
+                                <Plus className="w-4 h-4 mr-1" /> Add Field
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                className="text-red-600"
+                                onClick={() => handleDeleteForm(form.form_id)}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{form.description}</p>
+                          <p className="text-xs text-muted-foreground">Slug: /{form.slug}</p>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium mb-2">Fields ({form.fields?.length || 0})</p>
+                            {form.fields?.map((field, idx) => (
+                              <div key={field.field_id} className="flex items-center gap-3 p-2 bg-muted rounded">
+                                <GripVertical className="w-4 h-4 text-muted-foreground" />
+                                <div className="flex-1">
+                                  <span className="font-medium">{field.label}</span>
+                                  <span className="text-xs text-muted-foreground ml-2">({field.field_type})</span>
+                                  {field.required && <Badge className="ml-2 text-xs" variant="outline">Required</Badge>}
+                                  {!field.is_active && <Badge className="ml-2 text-xs bg-gray-100">Disabled</Badge>}
+                                </div>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm"
+                                  onClick={() => handleUpdateField(form.form_id, field.field_id, { is_active: !field.is_active })}
+                                >
+                                  {field.is_active ? <ToggleRight className="w-4 h-4 text-green-600" /> : <ToggleLeft className="w-4 h-4 text-gray-400" />}
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm"
+                                  onClick={() => handleUpdateField(form.form_id, field.field_id, { required: !field.required })}
+                                >
+                                  {field.required ? <CheckCircle2 className="w-4 h-4 text-blue-600" /> : <CheckCircle2 className="w-4 h-4 text-gray-300" />}
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm"
+                                  className="text-red-600"
+                                  onClick={() => handleDeleteField(form.form_id, field.field_id)}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            ))}
+                            {(!form.fields || form.fields.length === 0) && (
+                              <p className="text-sm text-muted-foreground italic">No fields yet. Click "Add Field" to start building the form.</p>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                    {forms.length === 0 && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No forms created yet. Click "Create Form" to get started.
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          {/* Users Tab */}
+          {canManageUsers && (
             <TabsContent value="users">
               <Card>
                 <CardHeader>
@@ -768,6 +1083,7 @@ export default function MarshalDashboardPage() {
                           <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Role</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Last Login</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Status</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -776,7 +1092,7 @@ export default function MarshalDashboardPage() {
                             <td className="px-4 py-3 font-medium">{u.username}</td>
                             <td className="px-4 py-3">{u.full_name}</td>
                             <td className="px-4 py-3">
-                              <Badge variant="outline">{roleLabels[u.role]}</Badge>
+                              <Badge variant="outline">{roleLabels[u.role] || u.role}</Badge>
                             </td>
                             <td className="px-4 py-3 text-sm text-muted-foreground">
                               {u.last_login ? new Date(u.last_login).toLocaleString() : 'Never'}
@@ -785,6 +1101,18 @@ export default function MarshalDashboardPage() {
                               <Badge className={u.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
                                 {u.is_active ? 'Active' : 'Disabled'}
                               </Badge>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => openEditUser(u)}>
+                                  <Edit className="w-4 h-4" />
+                                </Button>
+                                {u.marshal_id !== user?.marshal_id && (
+                                  <Button variant="ghost" size="sm" className="text-red-600" onClick={() => handleDeleteUser(u.marshal_id)}>
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -839,32 +1167,7 @@ export default function MarshalDashboardPage() {
                   <Label className="text-xs text-muted-foreground">Status</Label>
                   <Badge className={statusColors[selectedVolunteer.status]}>{selectedVolunteer.status}</Badge>
                 </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Volunteered Before</Label>
-                  <p>{selectedVolunteer.volunteered_before ? 'Yes' : 'No'}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Registered</Label>
-                  <p>{new Date(selectedVolunteer.created_at).toLocaleDateString()}</p>
-                </div>
               </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Availability</Label>
-                <div className="grid grid-cols-4 gap-2 mt-2">
-                  {tournamentDates.map((day, i) => (
-                    <div key={day.value} className="text-center p-2 bg-muted rounded">
-                      <p className="text-xs font-medium">{['Thu', 'Fri', 'Sat', 'Sun'][i]}</p>
-                      <p className="text-xs capitalize">{selectedVolunteer[`availability_${['thursday', 'friday', 'saturday', 'sunday'][i]}`]?.replace('_', ' ')}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {selectedVolunteer.assigned_location && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Assigned Location</Label>
-                  <p>{selectedVolunteer.assigned_location}</p>
-                </div>
-              )}
             </div>
           )}
           <DialogFooter>
@@ -922,9 +1225,9 @@ export default function MarshalDashboardPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="area_supervisor">Area Supervisor</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="viewer">Viewer</SelectItem>
+                  {availableRoles.filter(r => r.value !== 'chief_marshal').map(role => (
+                    <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -932,6 +1235,177 @@ export default function MarshalDashboardPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateUserModal(false)}>Cancel</Button>
             <Button onClick={handleCreateUser}>Create User</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit User Modal */}
+      <Dialog open={showEditUserModal} onOpenChange={setShowEditUserModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit User: {selectedUser?.username}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Full Name</Label>
+              <Input
+                value={editUser.full_name}
+                onChange={(e) => setEditUser(prev => ({ ...prev, full_name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label>Role</Label>
+              <Select value={editUser.role} onValueChange={(v) => setEditUser(prev => ({ ...prev, role: v }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableRoles.map(role => (
+                    <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>New Password (leave blank to keep current)</Label>
+              <Input
+                type="password"
+                value={editUser.password}
+                onChange={(e) => setEditUser(prev => ({ ...prev, password: e.target.value }))}
+                placeholder="Enter new password"
+              />
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="is_active"
+                checked={editUser.is_active}
+                onCheckedChange={(checked) => setEditUser(prev => ({ ...prev, is_active: checked }))}
+              />
+              <Label htmlFor="is_active">Account Active</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditUserModal(false)}>Cancel</Button>
+            <Button onClick={handleEditUser}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Form Modal */}
+      <Dialog open={showFormModal} onOpenChange={setShowFormModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create New Form</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Form Name</Label>
+              <Input
+                value={newForm.name}
+                onChange={(e) => setNewForm(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="e.g., Media Accreditation"
+              />
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Textarea
+                value={newForm.description}
+                onChange={(e) => setNewForm(prev => ({ ...prev, description: e.target.value }))}
+                placeholder="Describe the purpose of this form"
+              />
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="form_active"
+                checked={newForm.is_active}
+                onCheckedChange={(checked) => setNewForm(prev => ({ ...prev, is_active: checked }))}
+              />
+              <Label htmlFor="form_active">Active (publicly accessible)</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFormModal(false)}>Cancel</Button>
+            <Button onClick={handleCreateForm}>Create Form</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Field Modal */}
+      <Dialog open={showFieldModal} onOpenChange={setShowFieldModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Field to: {selectedForm?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Field Label</Label>
+              <Input
+                value={newField.label}
+                onChange={(e) => setNewField(prev => ({ ...prev, label: e.target.value, name: e.target.value.toLowerCase().replace(/\s+/g, '_') }))}
+                placeholder="e.g., Company Name"
+              />
+            </div>
+            <div>
+              <Label>Field Name (internal)</Label>
+              <Input
+                value={newField.name}
+                onChange={(e) => setNewField(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="e.g., company_name"
+              />
+            </div>
+            <div>
+              <Label>Field Type</Label>
+              <Select value={newField.field_type} onValueChange={(v) => setNewField(prev => ({ ...prev, field_type: v }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {fieldTypes.map(t => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {['select', 'multiselect'].includes(newField.field_type) && (
+              <div>
+                <Label>Options (comma separated)</Label>
+                <Input
+                  value={newField.options}
+                  onChange={(e) => setNewField(prev => ({ ...prev, options: e.target.value }))}
+                  placeholder="e.g., Option 1, Option 2, Option 3"
+                />
+              </div>
+            )}
+            <div>
+              <Label>Placeholder</Label>
+              <Input
+                value={newField.placeholder}
+                onChange={(e) => setNewField(prev => ({ ...prev, placeholder: e.target.value }))}
+                placeholder="Placeholder text"
+              />
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="field_required"
+                  checked={newField.required}
+                  onCheckedChange={(checked) => setNewField(prev => ({ ...prev, required: checked }))}
+                />
+                <Label htmlFor="field_required">Required</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="field_active"
+                  checked={newField.is_active}
+                  onCheckedChange={(checked) => setNewField(prev => ({ ...prev, is_active: checked }))}
+                />
+                <Label htmlFor="field_active">Active</Label>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFieldModal(false)}>Cancel</Button>
+            <Button onClick={handleAddField}>Add Field</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
