@@ -430,7 +430,7 @@ class VolunteerRegistrationCreate(BaseModel):
     last_name: str
     nationality: str
     identification_number: str
-    golf_club: Optional[str] = None
+    golf_club: str  # Made mandatory
     email: str
     phone: str
     role: str
