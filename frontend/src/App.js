@@ -16,6 +16,9 @@ import AboutPage from "./pages/AboutPage";
 import AboutKOGLPage from "./pages/AboutKOGLPage";
 import ContactPage from "./pages/ContactPage";
 import AdminDashboard from "./pages/AdminDashboard";
+import VolunteerRegisterPage from "./pages/VolunteerRegisterPage";
+import MarshalLoginPage from "./pages/MarshalLoginPage";
+import MarshalDashboardPage from "./pages/MarshalDashboardPage";
 
 // Components
 import MainLayout from "./components/MainLayout";
@@ -41,6 +44,11 @@ function AppRouter() {
   
   return (
     <Routes>
+      {/* Marshal Dashboard Routes - Outside MainLayout, no indexing */}
+      <Route path="/marshal-login" element={<MarshalLoginPage />} />
+      <Route path="/marshal-dashboard" element={<MarshalDashboardPage />} />
+      
+      {/* Main Site Routes */}
       <Route element={<MainLayout />}>
         <Route path="/" element={<HomePage />} />
         <Route path="/tournament" element={<TournamentPage />} />
@@ -50,6 +58,7 @@ function AppRouter() {
         <Route path="/travel" element={<TravelPage />} />
         <Route path="/media" element={<MediaPage />} />
         <Route path="/registration" element={<RegistrationPage />} />
+        <Route path="/volunteer-register" element={<VolunteerRegisterPage />} />
         <Route path="/news" element={<NewsPage />} />
         <Route path="/news/:articleId" element={<NewsPage />} />
         <Route path="/gallery" element={<GalleryPage />} />
