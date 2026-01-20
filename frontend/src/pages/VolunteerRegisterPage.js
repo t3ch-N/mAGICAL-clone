@@ -81,7 +81,7 @@ export default function VolunteerRegisterPage() {
     e.preventDefault();
     
     // Validation
-    if (!formData.first_name || !formData.last_name || !formData.email || !formData.phone || !formData.role) {
+    if (!formData.first_name || !formData.last_name || !formData.email || !formData.phone || !formData.role || !formData.golf_club) {
       toast.error('Please fill in all required fields');
       return;
     }
