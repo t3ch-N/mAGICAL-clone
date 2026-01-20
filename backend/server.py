@@ -1674,6 +1674,283 @@ async def delete_marshal_user(request: Request, marshal_id: str):
     
     return {"success": True, "message": "User deleted"}
 
+@api_router.put("/marshal/users/{marshal_id}")
+async def update_marshal_user(request: Request, marshal_id: str, update: MarshalUserUpdate):
+    """Update marshal user (chief marshal only)"""
+    session = await require_marshal_role(request, ["chief_marshal"])
+    
+    user = await db.marshal_users.find_one({"marshal_id": marshal_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    update_data = {}
+    if update.full_name:
+        update_data["full_name"] = update.full_name
+    if update.role:
+        update_data["role"] = update.role
+    if update.is_active is not None:
+        update_data["is_active"] = update.is_active
+    if update.password:
+        update_data["password_hash"] = hash_password(update.password)
+    
+    if update_data:
+        await db.marshal_users.update_one({"marshal_id": marshal_id}, {"$set": update_data})
+        # If user is deactivated, delete their sessions
+        if update.is_active == False:
+            await db.marshal_sessions.delete_many({"marshal_id": marshal_id})
+    
+    return {"success": True, "message": "User updated successfully"}
+
+@api_router.get("/marshal/roles")
+async def get_available_roles(request: Request):
+    """Get list of available marshal roles"""
+    await require_marshal_auth(request)
+    return {
+        "roles": [
+            {"value": "chief_marshal", "label": "Chief Marshal", "description": "Full system access"},
+            {"value": "tournament_director", "label": "Tournament Director", "description": "Tournament operations management"},
+            {"value": "operations_manager", "label": "Operations Manager", "description": "Volunteer and logistics management"},
+            {"value": "area_supervisor", "label": "Area Supervisor", "description": "Supervise specific areas/holes"},
+            {"value": "admin", "label": "Admin", "description": "Administrative tasks and approvals"},
+            {"value": "coordinator", "label": "Coordinator", "description": "Coordinate volunteers and schedules"},
+            {"value": "viewer", "label": "Viewer", "description": "Read-only access"}
+        ]
+    }
+
+# ===================== DYNAMIC FORM BUILDER APIs =====================
+@api_router.post("/marshal/forms")
+async def create_registration_form(request: Request, form_data: dict):
+    """Create a new registration form (chief marshal/admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    
+    # Generate slug from name
+    slug = form_data.get("name", "form").lower().replace(" ", "-").replace("_", "-")
+    slug = ''.join(c for c in slug if c.isalnum() or c == '-')
+    
+    # Check if slug exists
+    existing = await db.registration_forms.find_one({"slug": slug}, {"_id": 0})
+    if existing:
+        slug = f"{slug}-{str(uuid.uuid4())[:8]}"
+    
+    form = {
+        "form_id": str(uuid.uuid4()),
+        "name": form_data.get("name"),
+        "slug": slug,
+        "description": form_data.get("description"),
+        "fields": form_data.get("fields", []),
+        "is_active": form_data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None,
+        "created_by": session["marshal_id"]
+    }
+    
+    await db.registration_forms.insert_one(form)
+    return {"success": True, "form_id": form["form_id"], "slug": slug}
+
+@api_router.get("/marshal/forms")
+async def list_registration_forms(request: Request):
+    """List all registration forms"""
+    await require_marshal_auth(request)
+    forms = await db.registration_forms.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return forms
+
+@api_router.get("/marshal/forms/{form_id}")
+async def get_registration_form(request: Request, form_id: str):
+    """Get a specific registration form"""
+    await require_marshal_auth(request)
+    form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
+    if not form:
+        # Try by slug
+        form = await db.registration_forms.find_one({"slug": form_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+    return form
+
+@api_router.put("/marshal/forms/{form_id}")
+async def update_registration_form(request: Request, form_id: str, form_data: dict):
+    """Update a registration form"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    
+    form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+    
+    update_data = {
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    if "name" in form_data:
+        update_data["name"] = form_data["name"]
+    if "description" in form_data:
+        update_data["description"] = form_data["description"]
+    if "fields" in form_data:
+        update_data["fields"] = form_data["fields"]
+    if "is_active" in form_data:
+        update_data["is_active"] = form_data["is_active"]
+    
+    await db.registration_forms.update_one({"form_id": form_id}, {"$set": update_data})
+    return {"success": True, "message": "Form updated successfully"}
+
+@api_router.delete("/marshal/forms/{form_id}")
+async def delete_registration_form(request: Request, form_id: str):
+    """Delete a registration form"""
+    session = await require_marshal_role(request, ["chief_marshal"])
+    
+    await db.registration_forms.delete_one({"form_id": form_id})
+    return {"success": True, "message": "Form deleted"}
+
+@api_router.post("/marshal/forms/{form_id}/fields")
+async def add_form_field(request: Request, form_id: str, field_data: dict):
+    """Add a field to a form"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    
+    form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+    
+    field = {
+        "field_id": str(uuid.uuid4()),
+        "name": field_data.get("name"),
+        "label": field_data.get("label"),
+        "field_type": field_data.get("field_type", "text"),
+        "required": field_data.get("required", False),
+        "is_active": field_data.get("is_active", True),
+        "options": field_data.get("options", []),
+        "placeholder": field_data.get("placeholder"),
+        "help_text": field_data.get("help_text"),
+        "order": len(form.get("fields", []))
+    }
+    
+    await db.registration_forms.update_one(
+        {"form_id": form_id},
+        {
+            "$push": {"fields": field},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    return {"success": True, "field_id": field["field_id"]}
+
+@api_router.put("/marshal/forms/{form_id}/fields/{field_id}")
+async def update_form_field(request: Request, form_id: str, field_id: str, field_data: dict):
+    """Update a specific field in a form"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    
+    form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+    
+    fields = form.get("fields", [])
+    field_index = next((i for i, f in enumerate(fields) if f.get("field_id") == field_id), None)
+    
+    if field_index is None:
+        raise HTTPException(status_code=404, detail="Field not found")
+    
+    # Update field properties
+    for key in ["name", "label", "field_type", "required", "is_active", "options", "placeholder", "help_text", "order"]:
+        if key in field_data:
+            fields[field_index][key] = field_data[key]
+    
+    await db.registration_forms.update_one(
+        {"form_id": form_id},
+        {
+            "$set": {
+                "fields": fields,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    return {"success": True, "message": "Field updated"}
+
+@api_router.delete("/marshal/forms/{form_id}/fields/{field_id}")
+async def delete_form_field(request: Request, form_id: str, field_id: str):
+    """Delete a field from a form"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    
+    await db.registration_forms.update_one(
+        {"form_id": form_id},
+        {
+            "$pull": {"fields": {"field_id": field_id}},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    return {"success": True, "message": "Field deleted"}
+
+# Public endpoint to get active forms
+@api_router.get("/forms")
+async def get_public_forms():
+    """Get all active public registration forms"""
+    forms = await db.registration_forms.find({"is_active": True}, {"_id": 0}).to_list(100)
+    return forms
+
+@api_router.get("/forms/{slug}")
+async def get_public_form_by_slug(slug: str):
+    """Get a specific form by slug (for public rendering)"""
+    form = await db.registration_forms.find_one({"slug": slug, "is_active": True}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found or inactive")
+    return form
+
+@api_router.post("/forms/{slug}/submit")
+async def submit_form(slug: str, submission_data: dict):
+    """Submit a form response"""
+    form = await db.registration_forms.find_one({"slug": slug, "is_active": True}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found or inactive")
+    
+    # Validate required fields
+    for field in form.get("fields", []):
+        if field.get("required") and field.get("is_active"):
+            field_name = field.get("name")
+            if field_name not in submission_data or not submission_data[field_name]:
+                raise HTTPException(status_code=400, detail=f"Field '{field.get('label')}' is required")
+    
+    submission = {
+        "submission_id": str(uuid.uuid4()),
+        "form_id": form["form_id"],
+        "form_slug": slug,
+        "form_name": form["name"],
+        "data": submission_data,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None
+    }
+    
+    await db.form_submissions.insert_one(submission)
+    return {"success": True, "submission_id": submission["submission_id"], "message": "Form submitted successfully"}
+
+@api_router.get("/marshal/submissions")
+async def get_form_submissions(request: Request, form_id: Optional[str] = None, status: Optional[str] = None):
+    """Get form submissions"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if form_id:
+        query["form_id"] = form_id
+    if status:
+        query["status"] = status
+    
+    submissions = await db.form_submissions.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return submissions
+
+@api_router.put("/marshal/submissions/{submission_id}")
+async def update_submission_status(request: Request, submission_id: str, update_data: dict):
+    """Update submission status"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director", "operations_manager"])
+    
+    status = update_data.get("status")
+    if status not in ["pending", "approved", "rejected"]:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    
+    await db.form_submissions.update_one(
+        {"submission_id": submission_id},
+        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {"success": True, "message": "Submission updated"}
+
 # ===================== EXPORT APIs =====================
 @api_router.get("/marshal/export/volunteers")
 async def export_volunteers(request: Request, format: str = "csv"):
