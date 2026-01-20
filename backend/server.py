@@ -1219,6 +1219,501 @@ async def update_policy(request: Request, policy_id: str, update: dict):
     await db.policies.update_one({"policy_id": policy_id}, {"$set": update})
     return {"message": "Policy updated successfully"}
 
+# ===================== MARSHAL AUTH HELPERS =====================
+def hash_password(password: str) -> str:
+    """Hash password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify password against hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+
+async def get_marshal_session(request: Request) -> Optional[dict]:
+    """Get marshal session from cookie or header"""
+    session_token = request.cookies.get("marshal_session")
+    if not session_token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            session_token = auth_header.split(" ")[1]
+    
+    if not session_token:
+        return None
+    
+    session = await db.marshal_sessions.find_one({"session_id": session_token}, {"_id": 0})
+    if not session:
+        return None
+    
+    # Check expiry
+    expires_at = session.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await db.marshal_sessions.delete_one({"session_id": session_token})
+        return None
+    
+    return session
+
+async def require_marshal_auth(request: Request) -> dict:
+    """Require marshal authentication"""
+    session = await get_marshal_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return session
+
+async def require_marshal_role(request: Request, allowed_roles: List[str]) -> dict:
+    """Require specific marshal roles"""
+    session = await require_marshal_auth(request)
+    if session["role"] not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return session
+
+# ===================== VOLUNTEER REGISTRATION APIs =====================
+@api_router.post("/volunteers/register")
+async def register_volunteer(volunteer: VolunteerRegistrationCreate):
+    """Public endpoint for volunteer registration"""
+    # Check if email already registered
+    existing = await db.volunteers.find_one({"email": volunteer.email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Check consent
+    if not volunteer.consent_given:
+        raise HTTPException(status_code=400, detail="Consent is required")
+    
+    # Check role quotas
+    if volunteer.role == "scorer":
+        scorer_count = await db.volunteers.count_documents({"role": "scorer", "status": {"$ne": "rejected"}})
+        if scorer_count >= 60:
+            raise HTTPException(status_code=400, detail="Scorer positions are full (max 60)")
+    
+    # Create volunteer record
+    vol_data = {
+        "volunteer_id": str(uuid.uuid4()),
+        "first_name": volunteer.first_name,
+        "last_name": volunteer.last_name,
+        "nationality": volunteer.nationality,
+        "identification_number": volunteer.identification_number,
+        "golf_club": volunteer.golf_club,
+        "email": volunteer.email,
+        "phone": volunteer.phone,
+        "role": volunteer.role,
+        "volunteered_before": volunteer.volunteered_before,
+        "availability_thursday": volunteer.availability_thursday,
+        "availability_friday": volunteer.availability_friday,
+        "availability_saturday": volunteer.availability_saturday,
+        "availability_sunday": volunteer.availability_sunday,
+        "photo_attached": volunteer.photo_attached,
+        "consent_given": volunteer.consent_given,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None,
+        "assigned_location": None,
+        "assigned_supervisor": None,
+        "assigned_shifts": [],
+        "notes": None
+    }
+    
+    await db.volunteers.insert_one(vol_data)
+    
+    return {
+        "success": True,
+        "message": "Registration submitted successfully. You will be notified once reviewed.",
+        "volunteer_id": vol_data["volunteer_id"]
+    }
+
+@api_router.get("/volunteers/stats")
+async def get_volunteer_stats():
+    """Get volunteer registration statistics (public)"""
+    marshal_count = await db.volunteers.count_documents({"role": "marshal", "status": {"$ne": "rejected"}})
+    scorer_count = await db.volunteers.count_documents({"role": "scorer", "status": {"$ne": "rejected"}})
+    
+    return {
+        "marshals": {"current": marshal_count, "minimum": 150},
+        "scorers": {"current": scorer_count, "maximum": 60}
+    }
+
+# ===================== MARSHAL AUTH APIs =====================
+@api_router.post("/marshal/login")
+async def marshal_login(credentials: MarshalLogin, response: Response):
+    """Marshal dashboard login"""
+    user = await db.marshal_users.find_one({"username": credentials.username}, {"_id": 0})
+    
+    if not user or not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    
+    # Create session
+    session_id = secrets.token_urlsafe(32)
+    session_data = {
+        "session_id": session_id,
+        "marshal_id": user["marshal_id"],
+        "username": user["username"],
+        "full_name": user["full_name"],
+        "role": user["role"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
+    }
+    
+    await db.marshal_sessions.insert_one(session_data)
+    
+    # Update last login
+    await db.marshal_users.update_one(
+        {"marshal_id": user["marshal_id"]},
+        {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    # Set cookie
+    response.set_cookie(
+        key="marshal_session",
+        value=session_id,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=8 * 60 * 60  # 8 hours
+    )
+    
+    return {
+        "success": True,
+        "session_id": session_id,
+        "user": {
+            "marshal_id": user["marshal_id"],
+            "username": user["username"],
+            "full_name": user["full_name"],
+            "role": user["role"]
+        }
+    }
+
+@api_router.post("/marshal/logout")
+async def marshal_logout(request: Request, response: Response):
+    """Marshal dashboard logout"""
+    session_token = request.cookies.get("marshal_session")
+    if session_token:
+        await db.marshal_sessions.delete_one({"session_id": session_token})
+    
+    response.delete_cookie("marshal_session")
+    return {"success": True, "message": "Logged out successfully"}
+
+@api_router.get("/marshal/me")
+async def get_marshal_profile(request: Request):
+    """Get current marshal user profile"""
+    session = await get_marshal_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    return {
+        "marshal_id": session["marshal_id"],
+        "username": session["username"],
+        "full_name": session["full_name"],
+        "role": session["role"]
+    }
+
+# ===================== MARSHAL DASHBOARD APIs =====================
+@api_router.get("/marshal/volunteers")
+async def get_all_volunteers(
+    request: Request,
+    status: Optional[str] = None,
+    role: Optional[str] = None,
+    search: Optional[str] = None
+):
+    """Get all volunteers (marshal dashboard)"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if status:
+        query["status"] = status
+    if role:
+        query["role"] = role
+    if search:
+        query["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search, "$options": "i"}}
+        ]
+    
+    volunteers = await db.volunteers.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return volunteers
+
+@api_router.get("/marshal/volunteers/{volunteer_id}")
+async def get_volunteer_details(request: Request, volunteer_id: str):
+    """Get specific volunteer details"""
+    await require_marshal_auth(request)
+    
+    volunteer = await db.volunteers.find_one({"volunteer_id": volunteer_id}, {"_id": 0})
+    if not volunteer:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    # Get attendance records
+    attendance = await db.volunteer_attendance.find(
+        {"volunteer_id": volunteer_id}, {"_id": 0}
+    ).sort("date", 1).to_list(100)
+    
+    volunteer["attendance_records"] = attendance
+    return volunteer
+
+@api_router.put("/marshal/volunteers/{volunteer_id}")
+async def update_volunteer(request: Request, volunteer_id: str, update: VolunteerUpdate):
+    """Update volunteer record"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    
+    volunteer = await db.volunteers.find_one({"volunteer_id": volunteer_id}, {"_id": 0})
+    if not volunteer:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.volunteers.update_one({"volunteer_id": volunteer_id}, {"$set": update_data})
+    return {"success": True, "message": "Volunteer updated successfully"}
+
+@api_router.post("/marshal/volunteers/{volunteer_id}/approve")
+async def approve_volunteer(request: Request, volunteer_id: str):
+    """Approve volunteer"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    
+    result = await db.volunteers.update_one(
+        {"volunteer_id": volunteer_id},
+        {"$set": {"status": "approved", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    return {"success": True, "message": "Volunteer approved"}
+
+@api_router.post("/marshal/volunteers/{volunteer_id}/reject")
+async def reject_volunteer(request: Request, volunteer_id: str):
+    """Reject volunteer"""
+    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    
+    result = await db.volunteers.update_one(
+        {"volunteer_id": volunteer_id},
+        {"$set": {"status": "rejected", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    return {"success": True, "message": "Volunteer rejected"}
+
+# ===================== ATTENDANCE APIs =====================
+@api_router.post("/marshal/attendance")
+async def mark_attendance(request: Request, attendance: dict):
+    """Mark volunteer attendance"""
+    session = await require_marshal_role(request, ["chief_marshal", "area_supervisor", "admin"])
+    
+    volunteer_id = attendance.get("volunteer_id")
+    date = attendance.get("date")  # YYYY-MM-DD
+    status = attendance.get("status")  # present, absent, late
+    
+    if not all([volunteer_id, date, status]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    # Check if volunteer exists
+    volunteer = await db.volunteers.find_one({"volunteer_id": volunteer_id}, {"_id": 0})
+    if not volunteer:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    # Upsert attendance record
+    attendance_data = {
+        "attendance_id": str(uuid.uuid4()),
+        "volunteer_id": volunteer_id,
+        "date": date,
+        "status": status,
+        "check_in_time": attendance.get("check_in_time"),
+        "check_out_time": attendance.get("check_out_time"),
+        "marked_by": session["marshal_id"],
+        "notes": attendance.get("notes"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.volunteer_attendance.update_one(
+        {"volunteer_id": volunteer_id, "date": date},
+        {"$set": attendance_data},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Attendance marked"}
+
+@api_router.get("/marshal/attendance/{date}")
+async def get_attendance_by_date(request: Request, date: str):
+    """Get attendance for a specific date"""
+    await require_marshal_auth(request)
+    
+    # Get all volunteers with their attendance for this date
+    volunteers = await db.volunteers.find(
+        {"status": "approved"}, {"_id": 0}
+    ).to_list(1000)
+    
+    attendance_records = await db.volunteer_attendance.find(
+        {"date": date}, {"_id": 0}
+    ).to_list(1000)
+    
+    attendance_map = {a["volunteer_id"]: a for a in attendance_records}
+    
+    result = []
+    for vol in volunteers:
+        att = attendance_map.get(vol["volunteer_id"], {})
+        result.append({
+            **vol,
+            "attendance_status": att.get("status"),
+            "check_in_time": att.get("check_in_time"),
+            "check_out_time": att.get("check_out_time")
+        })
+    
+    return result
+
+# ===================== MARSHAL USER MANAGEMENT =====================
+@api_router.post("/marshal/users")
+async def create_marshal_user(request: Request, user: MarshalUserCreate):
+    """Create marshal user (chief marshal only)"""
+    session = await require_marshal_role(request, ["chief_marshal"])
+    
+    # Check if username exists
+    existing = await db.marshal_users.find_one({"username": user.username}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    user_data = {
+        "marshal_id": str(uuid.uuid4()),
+        "username": user.username,
+        "password_hash": hash_password(user.password),
+        "full_name": user.full_name,
+        "role": user.role,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_login": None
+    }
+    
+    await db.marshal_users.insert_one(user_data)
+    
+    return {
+        "success": True,
+        "marshal_id": user_data["marshal_id"],
+        "message": "User created successfully"
+    }
+
+@api_router.get("/marshal/users")
+async def list_marshal_users(request: Request):
+    """List all marshal users (chief marshal only)"""
+    await require_marshal_role(request, ["chief_marshal"])
+    
+    users = await db.marshal_users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
+    return users
+
+@api_router.delete("/marshal/users/{marshal_id}")
+async def delete_marshal_user(request: Request, marshal_id: str):
+    """Delete marshal user (chief marshal only)"""
+    session = await require_marshal_role(request, ["chief_marshal"])
+    
+    # Can't delete yourself
+    if marshal_id == session["marshal_id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
+    await db.marshal_users.delete_one({"marshal_id": marshal_id})
+    await db.marshal_sessions.delete_many({"marshal_id": marshal_id})
+    
+    return {"success": True, "message": "User deleted"}
+
+# ===================== EXPORT APIs =====================
+@api_router.get("/marshal/export/volunteers")
+async def export_volunteers(request: Request, format: str = "csv"):
+    """Export volunteer list to CSV"""
+    await require_marshal_auth(request)
+    
+    volunteers = await db.volunteers.find({}, {"_id": 0}).to_list(1000)
+    
+    if format == "csv":
+        output = io.StringIO()
+        if volunteers:
+            writer = csv.DictWriter(output, fieldnames=volunteers[0].keys())
+            writer.writeheader()
+            writer.writerows(volunteers)
+        
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=volunteers.csv"}
+        )
+    
+    return volunteers
+
+@api_router.get("/marshal/export/attendance/{date}")
+async def export_attendance(request: Request, date: str):
+    """Export attendance for a specific date"""
+    await require_marshal_auth(request)
+    
+    attendance_data = await get_attendance_by_date(request, date)
+    
+    output = io.StringIO()
+    if attendance_data:
+        fieldnames = ["first_name", "last_name", "role", "assigned_location", "attendance_status", "check_in_time", "check_out_time"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(attendance_data)
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=attendance_{date}.csv"}
+    )
+
+@api_router.get("/marshal/stats")
+async def get_marshal_dashboard_stats(request: Request):
+    """Get dashboard statistics"""
+    await require_marshal_auth(request)
+    
+    total_volunteers = await db.volunteers.count_documents({})
+    pending = await db.volunteers.count_documents({"status": "pending"})
+    approved = await db.volunteers.count_documents({"status": "approved"})
+    rejected = await db.volunteers.count_documents({"status": "rejected"})
+    marshals = await db.volunteers.count_documents({"role": "marshal", "status": {"$ne": "rejected"}})
+    scorers = await db.volunteers.count_documents({"role": "scorer", "status": {"$ne": "rejected"}})
+    
+    return {
+        "total": total_volunteers,
+        "pending": pending,
+        "approved": approved,
+        "rejected": rejected,
+        "by_role": {
+            "marshals": marshals,
+            "scorers": scorers
+        },
+        "quotas": {
+            "marshals_minimum": 150,
+            "scorers_maximum": 60
+        }
+    }
+
+# ===================== SEED DEFAULT CHIEF MARSHAL =====================
+async def seed_chief_marshal():
+    """Create default chief marshal account if none exists"""
+    existing = await db.marshal_users.find_one({"role": "chief_marshal"}, {"_id": 0})
+    if not existing:
+        default_user = {
+            "marshal_id": str(uuid.uuid4()),
+            "username": "chiefmarshal",
+            "password_hash": hash_password("MKO2026Admin!"),
+            "full_name": "Chief Marshal",
+            "role": "chief_marshal",
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_login": None
+        }
+        await db.marshal_users.insert_one(default_user)
+        logger.info("Default chief marshal account created: username='chiefmarshal', password='MKO2026Admin!'")
+
+@app.on_event("startup")
+async def startup_event():
+    """Run on app startup"""
+    await seed_chief_marshal()
+
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
 async def root():
