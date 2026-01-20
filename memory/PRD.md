@@ -142,15 +142,51 @@ Then restart backend: `sudo supervisorctl restart backend`
 - ✅ **Top Banner**: DP World Tour logo (left) + KOGL logo (right) - no "Official Partners" text
 - ✅ **Sponsors Section Hierarchy**: Clear visual hierarchy with Main Partner, Official Partners, and Tournament Sponsors
 - ✅ **KOGL Page Logo**: Added KOGL logo prominently on About KOGL page
+- ✅ **Removed Emergent Branding**: "Made with Emergent" badge removed, page title updated to "Magical Kenya Open | DP World Tour"
+- ✅ **Registration Disabled**: Public Google OAuth registration temporarily disabled (Coming Soon)
 
 **Important Distinction:**
 - DP World Tour = European Tour organization (Magical Kenya Open is part of this tour)
 - DP World = Company sponsor (appears in Tournament Sponsors section)
 
+### Features Added (V1.5 - January 2025)
+- ✅ **Volunteer Registration System** (`/volunteer-register`)
+  - Public registration form (no login required)
+  - Fields: Name, Nationality, ID/Passport, Email, Phone, Golf Club, Role (Marshal/Scorer)
+  - Availability selection for all 4 tournament days (Feb 19-22, 2026)
+  - Consent acknowledgment checkbox
+  - Success confirmation page after submission
+  - Quotas: Minimum 150 marshals, Maximum 60 scorers
+
+- ✅ **Marshal Dashboard** (`/marshal-dashboard`)
+  - Secure username/password authentication (no Google OAuth)
+  - Role-based access control:
+    - **Chief Marshal**: Full access (user management, approvals, all features)
+    - **Area Supervisor**: View volunteers + mark attendance
+    - **Admin**: Data corrections + approvals
+    - **Viewer**: Read-only access
+  - Dashboard Tabs:
+    - **Overview**: Stats cards, role breakdown, quick actions
+    - **Volunteers**: Full list with search, filter by status/role, approve/reject
+    - **Attendance**: Daily attendance tracking (present/absent/late) per tournament day
+    - **Users**: User management (Chief Marshal only)
+  - CSV/Excel export for volunteers and attendance
+  - Session timeout (8 hours)
+  - No indexing by search engines (noindex meta tag)
+  - Fully KOGL branded (no Emergent branding)
+
+**Default Chief Marshal Credentials:**
+- Username: `chiefmarshal`
+- Password: `MKO2026Admin!`
+
+**Test Report:** 30/30 tests passed (100% backend + frontend)
+
 ## Prioritized Backlog (Updated)
 
 ### P0 (Critical - Next Phase)
 - ✅ ~~Update homepage sponsor logos~~ (COMPLETED)
+- ✅ ~~Volunteer Registration System~~ (COMPLETED)
+- ✅ ~~Marshal Dashboard~~ (COMPLETED)
 - Email notifications (BLOCKED - waiting for user Gmail credentials)
 - PDF downloads for policies (ensure download functionality works)
 
@@ -158,6 +194,7 @@ Then restart backend: `sudo supervisorctl restart backend`
 - Live API integration for real tournament scores
 - Board member photo uploads
 - Player profile detail pages
+- Volunteer assignment to specific holes/zones in marshal dashboard
 
 ### P2 (Medium Priority)
 - Stripe/payment integration for tickets
