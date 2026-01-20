@@ -53,25 +53,29 @@ export default function MarshalLoginPage() {
 
     setLoading(true);
     try {
+      console.log('Attempting login for:', username);
       const response = await fetch(`${API}/marshal/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
 
+      console.log('Response status:', response.status);
       const data = await response.json();
+      console.log('Response data:', data);
       
-      if (response.ok) {
+      if (response.ok && data.success) {
         // Store session in localStorage for SPA navigation
         localStorage.setItem('marshal_session', data.session_id);
         localStorage.setItem('marshal_user', JSON.stringify(data.user));
         toast.success(`Welcome, ${data.user.full_name}!`);
         navigate('/marshal-dashboard');
       } else {
-        toast.error(data.detail || 'Invalid credentials');
+        toast.error(data.detail || 'Invalid username or password');
       }
     } catch (error) {
-      toast.error('Login failed. Please try again.');
+      console.error('Login error:', error);
+      toast.error('Login failed. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
