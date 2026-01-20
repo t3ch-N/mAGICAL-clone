@@ -2041,10 +2041,43 @@ async def seed_chief_marshal():
         await db.marshal_users.insert_one(default_user)
         logger.info("Default chief marshal account created: username='chiefmarshal', password='MKO2026Admin!'")
 
+async def seed_default_volunteer_form():
+    """Create default volunteer registration form if none exists"""
+    existing = await db.registration_forms.find_one({"slug": "volunteer-registration"}, {"_id": 0})
+    if not existing:
+        default_form = {
+            "form_id": str(uuid.uuid4()),
+            "name": "Volunteer Registration",
+            "slug": "volunteer-registration",
+            "description": "Register as a volunteer marshal or scorer for the Magical Kenya Open 2026",
+            "fields": [
+                {"field_id": str(uuid.uuid4()), "name": "first_name", "label": "First Name", "field_type": "text", "required": True, "is_active": True, "order": 0},
+                {"field_id": str(uuid.uuid4()), "name": "last_name", "label": "Last Name", "field_type": "text", "required": True, "is_active": True, "order": 1},
+                {"field_id": str(uuid.uuid4()), "name": "nationality", "label": "Nationality", "field_type": "text", "required": True, "is_active": True, "order": 2},
+                {"field_id": str(uuid.uuid4()), "name": "identification_number", "label": "ID/Passport Number", "field_type": "text", "required": True, "is_active": True, "order": 3},
+                {"field_id": str(uuid.uuid4()), "name": "golf_club", "label": "Golf Club", "field_type": "text", "required": True, "is_active": True, "order": 4},
+                {"field_id": str(uuid.uuid4()), "name": "email", "label": "Email Address", "field_type": "email", "required": True, "is_active": True, "order": 5},
+                {"field_id": str(uuid.uuid4()), "name": "phone", "label": "Phone Number", "field_type": "phone", "required": True, "is_active": True, "order": 6},
+                {"field_id": str(uuid.uuid4()), "name": "role", "label": "Volunteer Role", "field_type": "select", "required": True, "is_active": True, "options": ["marshal", "scorer"], "order": 7},
+                {"field_id": str(uuid.uuid4()), "name": "volunteered_before", "label": "Have you volunteered at MKO before?", "field_type": "checkbox", "required": False, "is_active": True, "order": 8},
+                {"field_id": str(uuid.uuid4()), "name": "availability_thursday", "label": "Thursday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 9},
+                {"field_id": str(uuid.uuid4()), "name": "availability_friday", "label": "Friday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 10},
+                {"field_id": str(uuid.uuid4()), "name": "availability_saturday", "label": "Saturday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 11},
+                {"field_id": str(uuid.uuid4()), "name": "availability_sunday", "label": "Sunday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 12},
+            ],
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": None,
+            "created_by": None
+        }
+        await db.registration_forms.insert_one(default_form)
+        logger.info("Default volunteer registration form created")
+
 @app.on_event("startup")
 async def startup_event():
     """Run on app startup"""
     await seed_chief_marshal()
+    await seed_default_volunteer_form()
 
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
