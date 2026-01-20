@@ -556,6 +556,134 @@ class FormSubmission(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
 
+# ===================== MULTI-TOURNAMENT MODELS =====================
+class Tournament(BaseModel):
+    tournament_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str  # e.g., "Magical Kenya Open 2026"
+    code: str  # e.g., "MKO2026"
+    year: int
+    start_date: str  # YYYY-MM-DD
+    end_date: str
+    venue: str
+    is_active: bool = True
+    is_current: bool = False  # Only one tournament can be current
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# ===================== UNIFIED ACCREDITATION ENGINE MODELS =====================
+class AccreditationModuleType(str, Enum):
+    VOLUNTEERS = "volunteers"
+    VENDORS = "vendors"
+    MEDIA = "media"
+    PRO_AM = "pro_am"
+    PROCUREMENT = "procurement"
+    JOBS = "jobs"
+
+class AccreditationModule(BaseModel):
+    module_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    module_type: str  # volunteers, vendors, media, pro_am, procurement, jobs
+    name: str
+    slug: str
+    description: Optional[str] = None
+    form_id: Optional[str] = None  # Links to registration_forms
+    is_active: bool = True
+    is_public: bool = True  # Whether public can apply
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class WorkflowStatus(str, Enum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    UNDER_REVIEW = "under_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ASSIGNED = "assigned"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+class AccreditationSubmission(BaseModel):
+    submission_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    module_id: str
+    module_type: str
+    form_data: Dict[str, Any]
+    status: str = "submitted"
+    assigned_location_id: Optional[str] = None
+    assigned_zone_id: Optional[str] = None
+    assigned_access_level_id: Optional[str] = None
+    assigned_shifts: List[str] = Field(default_factory=list)
+    reviewer_id: Optional[str] = None
+    reviewer_notes: Optional[str] = None
+    attachments: List[Dict[str, str]] = Field(default_factory=list)  # [{filename, url, type}]
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+
+# ===================== LOCATION/ZONE/ACCESS MODELS =====================
+class Location(BaseModel):
+    location_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    name: str  # e.g., "Karen Country Club", "Media Center", "Hole 1"
+    code: str  # e.g., "KCC", "MC", "H1"
+    location_type: str  # venue, area, hole, facility
+    parent_location_id: Optional[str] = None  # For hierarchical locations
+    capacity: Optional[int] = None
+    description: Optional[str] = None
+    coordinates: Optional[Dict[str, float]] = None  # {lat, lng}
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Zone(BaseModel):
+    zone_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    location_id: str
+    name: str  # e.g., "VIP Area", "Player Lounge", "Press Room"
+    code: str
+    zone_type: str  # restricted, public, vip, media, service
+    description: Optional[str] = None
+    required_access_level_ids: List[str] = Field(default_factory=list)
+    capacity: Optional[int] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AccessLevel(BaseModel):
+    access_level_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    name: str  # e.g., "All Access", "Media Only", "General Public"
+    code: str  # e.g., "AA", "MED", "GP"
+    tier: int  # 1 = highest access, 10 = lowest
+    color: Optional[str] = None  # For badge color coding
+    description: Optional[str] = None
+    allowed_zone_ids: List[str] = Field(default_factory=list)
+    allowed_module_types: List[str] = Field(default_factory=list)  # Which modules can have this access
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AccessMapping(BaseModel):
+    mapping_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    module_type: str
+    access_level_id: str
+    is_default: bool = False  # Default access level for this module
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# ===================== AUDIT TRAIL MODEL =====================
+class AuditLog(BaseModel):
+    log_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: Optional[str] = None
+    user_id: str
+    username: str
+    action: str  # create, update, delete, approve, reject, assign, login, logout
+    entity_type: str  # submission, location, zone, user, etc.
+    entity_id: Optional[str] = None
+    old_value: Optional[Dict[str, Any]] = None
+    new_value: Optional[Dict[str, Any]] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ===================== AUTH HELPERS =====================
 async def get_session_from_request(request: Request) -> Optional[dict]:
     """Extract and validate session from cookies or Authorization header"""
