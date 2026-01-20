@@ -48,6 +48,7 @@ function AppRouter() {
       {/* Marshal Dashboard Routes - Outside MainLayout, no indexing */}
       <Route path="/marshal-login" element={<MarshalLoginPage />} />
       <Route path="/marshal-dashboard" element={<MarshalDashboardPage />} />
+      <Route path="/operations-dashboard" element={<OperationsDashboardPage />} />
       
       {/* Main Site Routes */}
       <Route element={<MainLayout />}>
