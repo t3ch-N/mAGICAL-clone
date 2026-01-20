@@ -356,6 +356,11 @@ export default function MarshalDashboardPage() {
 
   return (
     <div className="min-h-screen bg-muted" data-testid="marshal-dashboard">
+      <Helmet>
+        <meta name="robots" content="noindex, nofollow" />
+        <title>Marshal Dashboard | MKO 2026</title>
+      </Helmet>
+      
       {/* Header */}
       <header className="bg-primary text-primary-foreground sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
