@@ -510,6 +510,52 @@ class AttendanceRecord(BaseModel):
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+# ===================== DYNAMIC FORM BUILDER MODELS =====================
+class FormFieldType(str, Enum):
+    TEXT = "text"
+    EMAIL = "email"
+    PHONE = "phone"
+    NUMBER = "number"
+    SELECT = "select"
+    MULTISELECT = "multiselect"
+    CHECKBOX = "checkbox"
+    TEXTAREA = "textarea"
+    DATE = "date"
+    FILE = "file"
+
+class FormField(BaseModel):
+    field_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str  # Internal field name (snake_case)
+    label: str  # Display label
+    field_type: str
+    required: bool = False
+    is_active: bool = True
+    options: List[str] = Field(default_factory=list)  # For select/multiselect
+    placeholder: Optional[str] = None
+    help_text: Optional[str] = None
+    validation_regex: Optional[str] = None
+    order: int = 0
+
+class RegistrationForm(BaseModel):
+    form_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str  # e.g., "Volunteer Registration", "Media Accreditation"
+    slug: str  # URL-friendly name
+    description: Optional[str] = None
+    fields: List[FormField] = Field(default_factory=list)
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+class FormSubmission(BaseModel):
+    submission_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    form_id: str
+    form_slug: str
+    data: Dict[str, Any]  # Dynamic field data
+    status: str = "pending"  # pending, approved, rejected
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+
 # ===================== AUTH HELPERS =====================
 async def get_session_from_request(request: Request) -> Optional[dict]:
     """Extract and validate session from cookies or Authorization header"""
