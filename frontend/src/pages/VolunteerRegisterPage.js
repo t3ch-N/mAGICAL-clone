@@ -303,12 +303,13 @@ export default function VolunteerRegisterPage() {
                       />
                     </div>
                     <div className="md:col-span-2">
-                      <Label htmlFor="golf_club">Golf Club (Optional)</Label>
+                      <Label htmlFor="golf_club">Golf Club *</Label>
                       <Input
                         id="golf_club"
                         value={formData.golf_club}
                         onChange={(e) => handleChange('golf_club', e.target.value)}
                         placeholder="e.g., Karen Country Club"
+                        required
                         data-testid="input-golf-club"
                       />
                     </div>
