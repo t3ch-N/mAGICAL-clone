@@ -116,7 +116,7 @@ export default function MarshalDashboardPage() {
 
       try {
         const response = await fetch(`${API}/marshal/me`, {
-          credentials: 'include',
+          
           headers: { 'Authorization': `Bearer ${sessionId}` }
         });
         
@@ -145,8 +145,8 @@ export default function MarshalDashboardPage() {
     
     try {
       const [statsRes, volunteersRes] = await Promise.all([
-        fetch(`${API}/marshal/stats`, { headers, credentials: 'include' }),
-        fetch(`${API}/marshal/volunteers`, { headers, credentials: 'include' })
+        fetch(`${API}/marshal/stats`, { headers,  }),
+        fetch(`${API}/marshal/volunteers`, { headers,  })
       ]);
       
       if (statsRes.ok) setStats(await statsRes.json());
@@ -197,7 +197,7 @@ export default function MarshalDashboardPage() {
     try {
       const response = await fetch(`${API}/marshal/attendance/${date}`, {
         headers: { 'Authorization': `Bearer ${sessionId}` },
-        credentials: 'include'
+        
       });
       if (response.ok) {
         setAttendanceData(await response.json());
@@ -219,7 +219,7 @@ export default function MarshalDashboardPage() {
     try {
       const response = await fetch(`${API}/marshal/users`, {
         headers: { 'Authorization': `Bearer ${sessionId}` },
-        credentials: 'include'
+        
       });
       if (response.ok) {
         setMarshalUsers(await response.json());
@@ -241,7 +241,7 @@ export default function MarshalDashboardPage() {
     await fetch(`${API}/marshal/logout`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${sessionId}` },
-      credentials: 'include'
+      
     });
     localStorage.removeItem('marshal_session');
     localStorage.removeItem('marshal_user');
@@ -254,7 +254,7 @@ export default function MarshalDashboardPage() {
       const response = await fetch(`${API}/marshal/volunteers/${volunteerId}/approve`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${sessionId}` },
-        credentials: 'include'
+        
       });
       if (response.ok) {
         toast.success('Volunteer approved');
@@ -271,7 +271,7 @@ export default function MarshalDashboardPage() {
       const response = await fetch(`${API}/marshal/volunteers/${volunteerId}/reject`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${sessionId}` },
-        credentials: 'include'
+        
       });
       if (response.ok) {
         toast.success('Volunteer rejected');
@@ -291,7 +291,7 @@ export default function MarshalDashboardPage() {
           'Authorization': `Bearer ${sessionId}`,
           'Content-Type': 'application/json'
         },
-        credentials: 'include',
+        
         body: JSON.stringify({
           volunteer_id: volunteerId,
           date: attendanceDate,
@@ -316,7 +316,7 @@ export default function MarshalDashboardPage() {
           'Authorization': `Bearer ${sessionId}`,
           'Content-Type': 'application/json'
         },
-        credentials: 'include',
+        
         body: JSON.stringify(newUser)
       });
       if (response.ok) {
