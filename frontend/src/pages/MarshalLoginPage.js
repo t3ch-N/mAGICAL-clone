@@ -75,10 +75,10 @@ export default function MarshalLoginPage() {
 
   return (
     <div className="min-h-screen bg-muted flex items-center justify-center p-4" data-testid="marshal-login-page">
-      {/* Add noindex meta tag */}
-      <style>{`
-        head { display: block; }
-      `}</style>
+      <Helmet>
+        <meta name="robots" content="noindex, nofollow" />
+        <title>Marshal Login | MKO 2026</title>
+      </Helmet>
       
       <Card className="w-full max-w-md card-default" data-testid="login-card">
         <CardHeader className="text-center pb-2">
