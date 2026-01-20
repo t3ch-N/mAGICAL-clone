@@ -2201,11 +2201,755 @@ async def seed_default_volunteer_form():
         await db.registration_forms.insert_one(default_form)
         logger.info("Default volunteer registration form created")
 
+async def seed_default_tournament():
+    """Create default MKO 2026 tournament if none exists"""
+    existing = await db.tournaments.find_one({"code": "MKO2026"}, {"_id": 0})
+    if not existing:
+        tournament = {
+            "tournament_id": str(uuid.uuid4()),
+            "name": "Magical Kenya Open 2026",
+            "code": "MKO2026",
+            "year": 2026,
+            "start_date": "2026-02-19",
+            "end_date": "2026-02-22",
+            "venue": "Karen Country Club",
+            "is_active": True,
+            "is_current": True,
+            "settings": {
+                "volunteer_quota_marshals": 150,
+                "volunteer_quota_scorers": 60
+            },
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.tournaments.insert_one(tournament)
+        logger.info("Default MKO 2026 tournament created")
+        return tournament["tournament_id"]
+    return existing["tournament_id"]
+
+async def seed_accreditation_modules(tournament_id: str):
+    """Seed default accreditation modules for a tournament"""
+    modules = [
+        {"module_type": "volunteers", "name": "Volunteer Registration", "slug": "volunteers", "description": "Register as a tournament volunteer marshal or scorer"},
+        {"module_type": "vendors", "name": "Vendor Accreditation", "slug": "vendors", "description": "Apply for vendor/supplier accreditation"},
+        {"module_type": "media", "name": "Media Accreditation", "slug": "media", "description": "Apply for media/press accreditation"},
+        {"module_type": "pro_am", "name": "Pro-Am Registration", "slug": "pro-am", "description": "Register for the Pro-Am tournament"},
+        {"module_type": "procurement", "name": "Procurement & Tenders", "slug": "procurement", "description": "Submit tender and procurement applications"},
+        {"module_type": "jobs", "name": "Job Applications", "slug": "jobs", "description": "Apply for tournament job positions"},
+    ]
+    
+    for mod in modules:
+        existing = await db.accreditation_modules.find_one({
+            "tournament_id": tournament_id, 
+            "module_type": mod["module_type"]
+        }, {"_id": 0})
+        if not existing:
+            module_data = {
+                "module_id": str(uuid.uuid4()),
+                "tournament_id": tournament_id,
+                "module_type": mod["module_type"],
+                "name": mod["name"],
+                "slug": mod["slug"],
+                "description": mod["description"],
+                "form_id": None,
+                "is_active": mod["module_type"] == "volunteers",  # Only volunteers active by default
+                "is_public": True,
+                "settings": {},
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.accreditation_modules.insert_one(module_data)
+    logger.info("Default accreditation modules created")
+
+async def seed_default_locations(tournament_id: str):
+    """Seed default locations for a tournament"""
+    locations = [
+        {"name": "Karen Country Club", "code": "KCC", "location_type": "venue"},
+        {"name": "Media Center", "code": "MC", "location_type": "facility"},
+        {"name": "Hospitality Village", "code": "HV", "location_type": "facility"},
+        {"name": "Players Lounge", "code": "PL", "location_type": "facility"},
+        {"name": "Administration Office", "code": "AO", "location_type": "facility"},
+    ]
+    
+    for loc in locations:
+        existing = await db.locations.find_one({
+            "tournament_id": tournament_id,
+            "code": loc["code"]
+        }, {"_id": 0})
+        if not existing:
+            loc_data = {
+                "location_id": str(uuid.uuid4()),
+                "tournament_id": tournament_id,
+                "name": loc["name"],
+                "code": loc["code"],
+                "location_type": loc["location_type"],
+                "parent_location_id": None,
+                "capacity": None,
+                "description": None,
+                "coordinates": None,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.locations.insert_one(loc_data)
+    logger.info("Default locations created")
+
+async def seed_default_access_levels(tournament_id: str):
+    """Seed default access levels for a tournament"""
+    levels = [
+        {"name": "All Access", "code": "AA", "tier": 1, "color": "#FFD700", "description": "Full tournament access"},
+        {"name": "VIP", "code": "VIP", "tier": 2, "color": "#800080", "description": "VIP areas and hospitality"},
+        {"name": "Media", "code": "MED", "tier": 3, "color": "#0000FF", "description": "Media center and press areas"},
+        {"name": "Player Support", "code": "PS", "tier": 4, "color": "#008000", "description": "Player areas and lounge"},
+        {"name": "Operations", "code": "OPS", "tier": 5, "color": "#FFA500", "description": "Operational areas"},
+        {"name": "Vendor", "code": "VEN", "tier": 6, "color": "#A52A2A", "description": "Vendor and service areas"},
+        {"name": "General", "code": "GEN", "tier": 10, "color": "#808080", "description": "General public areas"},
+    ]
+    
+    for level in levels:
+        existing = await db.access_levels.find_one({
+            "tournament_id": tournament_id,
+            "code": level["code"]
+        }, {"_id": 0})
+        if not existing:
+            level_data = {
+                "access_level_id": str(uuid.uuid4()),
+                "tournament_id": tournament_id,
+                "name": level["name"],
+                "code": level["code"],
+                "tier": level["tier"],
+                "color": level["color"],
+                "description": level["description"],
+                "allowed_zone_ids": [],
+                "allowed_module_types": [],
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.access_levels.insert_one(level_data)
+    logger.info("Default access levels created")
+
 @app.on_event("startup")
 async def startup_event():
     """Run on app startup"""
     await seed_chief_marshal()
     await seed_default_volunteer_form()
+    tournament_id = await seed_default_tournament()
+    await seed_accreditation_modules(tournament_id)
+    await seed_default_locations(tournament_id)
+    await seed_default_access_levels(tournament_id)
+
+# ===================== AUDIT LOGGING HELPER =====================
+async def log_audit(
+    request: Request,
+    user_id: str,
+    username: str,
+    action: str,
+    entity_type: str,
+    entity_id: Optional[str] = None,
+    old_value: Optional[Dict] = None,
+    new_value: Optional[Dict] = None,
+    tournament_id: Optional[str] = None
+):
+    """Log an audit trail entry"""
+    log_entry = {
+        "log_id": str(uuid.uuid4()),
+        "tournament_id": tournament_id,
+        "user_id": user_id,
+        "username": username,
+        "action": action,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "old_value": old_value,
+        "new_value": new_value,
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.audit_logs.insert_one(log_entry)
+
+# ===================== TOURNAMENT APIs =====================
+@api_router.get("/tournaments")
+async def list_tournaments(request: Request):
+    """List all tournaments"""
+    await require_marshal_auth(request)
+    tournaments = await db.tournaments.find({}, {"_id": 0}).sort("year", -1).to_list(100)
+    return tournaments
+
+@api_router.get("/tournaments/current")
+async def get_current_tournament():
+    """Get the current active tournament (public)"""
+    tournament = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not tournament:
+        tournament = await db.tournaments.find_one({"is_active": True}, {"_id": 0})
+    return tournament
+
+@api_router.post("/tournaments")
+async def create_tournament(request: Request, data: dict):
+    """Create a new tournament"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    
+    tournament = {
+        "tournament_id": str(uuid.uuid4()),
+        "name": data.get("name"),
+        "code": data.get("code"),
+        "year": data.get("year"),
+        "start_date": data.get("start_date"),
+        "end_date": data.get("end_date"),
+        "venue": data.get("venue"),
+        "is_active": data.get("is_active", True),
+        "is_current": False,
+        "settings": data.get("settings", {}),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.tournaments.insert_one(tournament)
+    
+    # Seed default data for new tournament
+    await seed_accreditation_modules(tournament["tournament_id"])
+    await seed_default_locations(tournament["tournament_id"])
+    await seed_default_access_levels(tournament["tournament_id"])
+    
+    await log_audit(request, session["marshal_id"], session["username"], "create", "tournament", tournament["tournament_id"], None, tournament)
+    
+    return {"success": True, "tournament_id": tournament["tournament_id"]}
+
+@api_router.put("/tournaments/{tournament_id}")
+async def update_tournament(request: Request, tournament_id: str, data: dict):
+    """Update a tournament"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    
+    old_tournament = await db.tournaments.find_one({"tournament_id": tournament_id}, {"_id": 0})
+    if not old_tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    update_data = {k: v for k, v in data.items() if k not in ["tournament_id", "created_at"]}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # If setting as current, unset others
+    if data.get("is_current"):
+        await db.tournaments.update_many({}, {"$set": {"is_current": False}})
+    
+    await db.tournaments.update_one({"tournament_id": tournament_id}, {"$set": update_data})
+    await log_audit(request, session["marshal_id"], session["username"], "update", "tournament", tournament_id, old_tournament, update_data)
+    
+    return {"success": True}
+
+# ===================== ACCREDITATION MODULE APIs =====================
+@api_router.get("/accreditation/modules")
+async def list_accreditation_modules(request: Request, tournament_id: Optional[str] = None):
+    """List all accreditation modules"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if tournament_id:
+        query["tournament_id"] = tournament_id
+    else:
+        # Get current tournament
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        if current:
+            query["tournament_id"] = current["tournament_id"]
+    
+    modules = await db.accreditation_modules.find(query, {"_id": 0}).to_list(100)
+    return modules
+
+@api_router.get("/accreditation/modules/public")
+async def list_public_modules():
+    """List active public modules (for application pages)"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not current:
+        return []
+    
+    modules = await db.accreditation_modules.find({
+        "tournament_id": current["tournament_id"],
+        "is_active": True,
+        "is_public": True
+    }, {"_id": 0}).to_list(100)
+    return modules
+
+@api_router.put("/accreditation/modules/{module_id}")
+async def update_accreditation_module(request: Request, module_id: str, data: dict):
+    """Update an accreditation module"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    
+    old_module = await db.accreditation_modules.find_one({"module_id": module_id}, {"_id": 0})
+    if not old_module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    update_data = {k: v for k, v in data.items() if k not in ["module_id", "tournament_id", "module_type", "created_at"]}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.accreditation_modules.update_one({"module_id": module_id}, {"$set": update_data})
+    await log_audit(request, session["marshal_id"], session["username"], "update", "module", module_id, old_module, update_data, old_module.get("tournament_id"))
+    
+    return {"success": True}
+
+# ===================== LOCATION APIs =====================
+@api_router.get("/locations")
+async def list_locations(request: Request, tournament_id: Optional[str] = None):
+    """List all locations"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if tournament_id:
+        query["tournament_id"] = tournament_id
+    else:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        if current:
+            query["tournament_id"] = current["tournament_id"]
+    
+    locations = await db.locations.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return locations
+
+@api_router.post("/locations")
+async def create_location(request: Request, data: dict):
+    """Create a new location"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    
+    # Get tournament_id
+    tournament_id = data.get("tournament_id")
+    if not tournament_id:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        tournament_id = current["tournament_id"] if current else None
+    
+    if not tournament_id:
+        raise HTTPException(status_code=400, detail="No active tournament")
+    
+    location = {
+        "location_id": str(uuid.uuid4()),
+        "tournament_id": tournament_id,
+        "name": data.get("name"),
+        "code": data.get("code", "").upper(),
+        "location_type": data.get("location_type", "area"),
+        "parent_location_id": data.get("parent_location_id"),
+        "capacity": data.get("capacity"),
+        "description": data.get("description"),
+        "coordinates": data.get("coordinates"),
+        "is_active": data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.locations.insert_one(location)
+    await log_audit(request, session["marshal_id"], session["username"], "create", "location", location["location_id"], None, location, tournament_id)
+    
+    return {"success": True, "location_id": location["location_id"]}
+
+@api_router.put("/locations/{location_id}")
+async def update_location(request: Request, location_id: str, data: dict):
+    """Update a location"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    
+    old_location = await db.locations.find_one({"location_id": location_id}, {"_id": 0})
+    if not old_location:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    update_data = {k: v for k, v in data.items() if k not in ["location_id", "tournament_id", "created_at"]}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.locations.update_one({"location_id": location_id}, {"$set": update_data})
+    await log_audit(request, session["marshal_id"], session["username"], "update", "location", location_id, old_location, update_data, old_location.get("tournament_id"))
+    
+    return {"success": True}
+
+@api_router.delete("/locations/{location_id}")
+async def delete_location(request: Request, location_id: str):
+    """Delete a location"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    
+    location = await db.locations.find_one({"location_id": location_id}, {"_id": 0})
+    if not location:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    await db.locations.delete_one({"location_id": location_id})
+    await log_audit(request, session["marshal_id"], session["username"], "delete", "location", location_id, location, None, location.get("tournament_id"))
+    
+    return {"success": True}
+
+# ===================== ZONE APIs =====================
+@api_router.get("/zones")
+async def list_zones(request: Request, tournament_id: Optional[str] = None, location_id: Optional[str] = None):
+    """List all zones"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if tournament_id:
+        query["tournament_id"] = tournament_id
+    else:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        if current:
+            query["tournament_id"] = current["tournament_id"]
+    
+    if location_id:
+        query["location_id"] = location_id
+    
+    zones = await db.zones.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return zones
+
+@api_router.post("/zones")
+async def create_zone(request: Request, data: dict):
+    """Create a new zone"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    
+    tournament_id = data.get("tournament_id")
+    if not tournament_id:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        tournament_id = current["tournament_id"] if current else None
+    
+    if not tournament_id:
+        raise HTTPException(status_code=400, detail="No active tournament")
+    
+    zone = {
+        "zone_id": str(uuid.uuid4()),
+        "tournament_id": tournament_id,
+        "location_id": data.get("location_id"),
+        "name": data.get("name"),
+        "code": data.get("code", "").upper(),
+        "zone_type": data.get("zone_type", "public"),
+        "description": data.get("description"),
+        "required_access_level_ids": data.get("required_access_level_ids", []),
+        "capacity": data.get("capacity"),
+        "is_active": data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.zones.insert_one(zone)
+    await log_audit(request, session["marshal_id"], session["username"], "create", "zone", zone["zone_id"], None, zone, tournament_id)
+    
+    return {"success": True, "zone_id": zone["zone_id"]}
+
+@api_router.put("/zones/{zone_id}")
+async def update_zone(request: Request, zone_id: str, data: dict):
+    """Update a zone"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    
+    old_zone = await db.zones.find_one({"zone_id": zone_id}, {"_id": 0})
+    if not old_zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    
+    update_data = {k: v for k, v in data.items() if k not in ["zone_id", "tournament_id", "created_at"]}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.zones.update_one({"zone_id": zone_id}, {"$set": update_data})
+    await log_audit(request, session["marshal_id"], session["username"], "update", "zone", zone_id, old_zone, update_data, old_zone.get("tournament_id"))
+    
+    return {"success": True}
+
+@api_router.delete("/zones/{zone_id}")
+async def delete_zone(request: Request, zone_id: str):
+    """Delete a zone"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    
+    zone = await db.zones.find_one({"zone_id": zone_id}, {"_id": 0})
+    if not zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    
+    await db.zones.delete_one({"zone_id": zone_id})
+    await log_audit(request, session["marshal_id"], session["username"], "delete", "zone", zone_id, zone, None, zone.get("tournament_id"))
+    
+    return {"success": True}
+
+# ===================== ACCESS LEVEL APIs =====================
+@api_router.get("/access-levels")
+async def list_access_levels(request: Request, tournament_id: Optional[str] = None):
+    """List all access levels"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if tournament_id:
+        query["tournament_id"] = tournament_id
+    else:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        if current:
+            query["tournament_id"] = current["tournament_id"]
+    
+    levels = await db.access_levels.find(query, {"_id": 0}).sort("tier", 1).to_list(100)
+    return levels
+
+@api_router.post("/access-levels")
+async def create_access_level(request: Request, data: dict):
+    """Create a new access level"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    
+    tournament_id = data.get("tournament_id")
+    if not tournament_id:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        tournament_id = current["tournament_id"] if current else None
+    
+    if not tournament_id:
+        raise HTTPException(status_code=400, detail="No active tournament")
+    
+    level = {
+        "access_level_id": str(uuid.uuid4()),
+        "tournament_id": tournament_id,
+        "name": data.get("name"),
+        "code": data.get("code", "").upper(),
+        "tier": data.get("tier", 5),
+        "color": data.get("color"),
+        "description": data.get("description"),
+        "allowed_zone_ids": data.get("allowed_zone_ids", []),
+        "allowed_module_types": data.get("allowed_module_types", []),
+        "is_active": data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.access_levels.insert_one(level)
+    await log_audit(request, session["marshal_id"], session["username"], "create", "access_level", level["access_level_id"], None, level, tournament_id)
+    
+    return {"success": True, "access_level_id": level["access_level_id"]}
+
+@api_router.put("/access-levels/{level_id}")
+async def update_access_level(request: Request, level_id: str, data: dict):
+    """Update an access level"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    
+    old_level = await db.access_levels.find_one({"access_level_id": level_id}, {"_id": 0})
+    if not old_level:
+        raise HTTPException(status_code=404, detail="Access level not found")
+    
+    update_data = {k: v for k, v in data.items() if k not in ["access_level_id", "tournament_id", "created_at"]}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.access_levels.update_one({"access_level_id": level_id}, {"$set": update_data})
+    await log_audit(request, session["marshal_id"], session["username"], "update", "access_level", level_id, old_level, update_data, old_level.get("tournament_id"))
+    
+    return {"success": True}
+
+@api_router.delete("/access-levels/{level_id}")
+async def delete_access_level(request: Request, level_id: str):
+    """Delete an access level"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    
+    level = await db.access_levels.find_one({"access_level_id": level_id}, {"_id": 0})
+    if not level:
+        raise HTTPException(status_code=404, detail="Access level not found")
+    
+    await db.access_levels.delete_one({"access_level_id": level_id})
+    await log_audit(request, session["marshal_id"], session["username"], "delete", "access_level", level_id, level, None, level.get("tournament_id"))
+    
+    return {"success": True}
+
+# ===================== UNIFIED ACCREDITATION SUBMISSION APIs =====================
+@api_router.post("/accreditation/apply/{module_slug}")
+async def submit_accreditation(module_slug: str, data: dict):
+    """Public endpoint to submit an accreditation application"""
+    # Get current tournament
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not current:
+        raise HTTPException(status_code=400, detail="No active tournament")
+    
+    # Get module
+    module = await db.accreditation_modules.find_one({
+        "tournament_id": current["tournament_id"],
+        "slug": module_slug,
+        "is_active": True,
+        "is_public": True
+    }, {"_id": 0})
+    
+    if not module:
+        raise HTTPException(status_code=404, detail="Application module not found or not accepting applications")
+    
+    # For volunteers, use existing system
+    if module["module_type"] == "volunteers":
+        raise HTTPException(status_code=400, detail="Please use the volunteer registration page")
+    
+    submission = {
+        "submission_id": str(uuid.uuid4()),
+        "tournament_id": current["tournament_id"],
+        "module_id": module["module_id"],
+        "module_type": module["module_type"],
+        "form_data": data.get("form_data", data),
+        "status": "submitted",
+        "assigned_location_id": None,
+        "assigned_zone_id": None,
+        "assigned_access_level_id": None,
+        "assigned_shifts": [],
+        "reviewer_id": None,
+        "reviewer_notes": None,
+        "attachments": data.get("attachments", []),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None,
+        "reviewed_at": None
+    }
+    
+    await db.accreditation_submissions.insert_one(submission)
+    
+    return {
+        "success": True,
+        "submission_id": submission["submission_id"],
+        "message": f"Your {module['name']} application has been submitted successfully."
+    }
+
+@api_router.get("/accreditation/submissions")
+async def list_submissions(
+    request: Request,
+    module_type: Optional[str] = None,
+    status: Optional[str] = None,
+    tournament_id: Optional[str] = None
+):
+    """List all accreditation submissions"""
+    await require_marshal_auth(request)
+    
+    query = {}
+    if tournament_id:
+        query["tournament_id"] = tournament_id
+    else:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        if current:
+            query["tournament_id"] = current["tournament_id"]
+    
+    if module_type:
+        query["module_type"] = module_type
+    if status:
+        query["status"] = status
+    
+    submissions = await db.accreditation_submissions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return submissions
+
+@api_router.get("/accreditation/submissions/{submission_id}")
+async def get_submission(request: Request, submission_id: str):
+    """Get a specific submission"""
+    await require_marshal_auth(request)
+    
+    submission = await db.accreditation_submissions.find_one({"submission_id": submission_id}, {"_id": 0})
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    return submission
+
+@api_router.put("/accreditation/submissions/{submission_id}")
+async def update_submission(request: Request, submission_id: str, data: dict):
+    """Update a submission (status, assignment, notes)"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin", "coordinator"])
+    
+    old_submission = await db.accreditation_submissions.find_one({"submission_id": submission_id}, {"_id": 0})
+    if not old_submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    update_data = {}
+    allowed_fields = ["status", "assigned_location_id", "assigned_zone_id", "assigned_access_level_id", "assigned_shifts", "reviewer_notes"]
+    
+    for field in allowed_fields:
+        if field in data:
+            update_data[field] = data[field]
+    
+    if update_data:
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        update_data["reviewer_id"] = session["marshal_id"]
+        
+        if "status" in update_data and update_data["status"] in ["approved", "rejected"]:
+            update_data["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        
+        await db.accreditation_submissions.update_one({"submission_id": submission_id}, {"$set": update_data})
+        await log_audit(request, session["marshal_id"], session["username"], "update", "submission", submission_id, old_submission, update_data, old_submission.get("tournament_id"))
+    
+    return {"success": True}
+
+@api_router.get("/accreditation/stats")
+async def get_accreditation_stats(request: Request, tournament_id: Optional[str] = None):
+    """Get accreditation statistics across all modules"""
+    await require_marshal_auth(request)
+    
+    if not tournament_id:
+        current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+        tournament_id = current["tournament_id"] if current else None
+    
+    if not tournament_id:
+        return {}
+    
+    # Get counts per module and status
+    pipeline = [
+        {"$match": {"tournament_id": tournament_id}},
+        {"$group": {
+            "_id": {"module_type": "$module_type", "status": "$status"},
+            "count": {"$sum": 1}
+        }}
+    ]
+    
+    results = await db.accreditation_submissions.aggregate(pipeline).to_list(100)
+    
+    stats = {}
+    for r in results:
+        module_type = r["_id"]["module_type"]
+        status = r["_id"]["status"]
+        if module_type not in stats:
+            stats[module_type] = {"total": 0, "submitted": 0, "under_review": 0, "approved": 0, "rejected": 0, "assigned": 0}
+        stats[module_type][status] = r["count"]
+        stats[module_type]["total"] += r["count"]
+    
+    return stats
+
+# ===================== AUDIT LOG APIs =====================
+@api_router.get("/audit-logs")
+async def list_audit_logs(
+    request: Request,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 100
+):
+    """List audit logs"""
+    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    
+    query = {}
+    if entity_type:
+        query["entity_type"] = entity_type
+    if entity_id:
+        query["entity_id"] = entity_id
+    if user_id:
+        query["user_id"] = user_id
+    
+    logs = await db.audit_logs.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return logs
+
+# ===================== EXPORT APIs FOR ACCREDITATION =====================
+@api_router.get("/accreditation/export/{module_type}")
+async def export_accreditation_submissions(request: Request, module_type: str, status: Optional[str] = None):
+    """Export submissions for a module"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not current:
+        return []
+    
+    query = {"tournament_id": current["tournament_id"], "module_type": module_type}
+    if status:
+        query["status"] = status
+    
+    submissions = await db.accreditation_submissions.find(query, {"_id": 0}).to_list(5000)
+    
+    if not submissions:
+        return StreamingResponse(
+            iter(["No data"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={module_type}_export.csv"}
+        )
+    
+    # Flatten form_data for CSV
+    output = io.StringIO()
+    
+    # Get all possible keys from form_data
+    all_keys = set()
+    for sub in submissions:
+        if sub.get("form_data"):
+            all_keys.update(sub["form_data"].keys())
+    
+    fieldnames = ["submission_id", "status", "created_at", "reviewed_at"] + sorted(all_keys)
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    
+    for sub in submissions:
+        row = {
+            "submission_id": sub["submission_id"],
+            "status": sub["status"],
+            "created_at": sub["created_at"],
+            "reviewed_at": sub.get("reviewed_at", "")
+        }
+        if sub.get("form_data"):
+            row.update(sub["form_data"])
+        writer.writerow(row)
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={module_type}_export.csv"}
+    )
 
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
