@@ -383,6 +383,124 @@ class ContactMessageCreate(BaseModel):
     subject: str
     message: str
 
+# ===================== VOLUNTEER MODELS =====================
+class VolunteerAvailability(str, Enum):
+    ALL_DAY = "all_day"
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    NOT_AVAILABLE = "not_available"
+
+class VolunteerRole(str, Enum):
+    MARSHAL = "marshal"
+    SCORER = "scorer"
+
+class VolunteerStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+class VolunteerRegistration(BaseModel):
+    volunteer_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    first_name: str
+    last_name: str
+    nationality: str
+    identification_number: str
+    golf_club: Optional[str] = None
+    email: str
+    phone: str
+    role: VolunteerRole
+    volunteered_before: bool = False
+    availability_thursday: VolunteerAvailability = VolunteerAvailability.NOT_AVAILABLE
+    availability_friday: VolunteerAvailability = VolunteerAvailability.NOT_AVAILABLE
+    availability_saturday: VolunteerAvailability = VolunteerAvailability.NOT_AVAILABLE
+    availability_sunday: VolunteerAvailability = VolunteerAvailability.NOT_AVAILABLE
+    photo_attached: bool = False
+    consent_given: bool = False
+    status: VolunteerStatus = VolunteerStatus.PENDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+    # Assignment fields
+    assigned_location: Optional[str] = None
+    assigned_supervisor: Optional[str] = None
+    assigned_shifts: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+class VolunteerRegistrationCreate(BaseModel):
+    first_name: str
+    last_name: str
+    nationality: str
+    identification_number: str
+    golf_club: Optional[str] = None
+    email: str
+    phone: str
+    role: str
+    volunteered_before: bool = False
+    availability_thursday: str = "not_available"
+    availability_friday: str = "not_available"
+    availability_saturday: str = "not_available"
+    availability_sunday: str = "not_available"
+    photo_attached: bool = False
+    consent_given: bool = True
+
+class VolunteerUpdate(BaseModel):
+    status: Optional[str] = None
+    assigned_location: Optional[str] = None
+    assigned_supervisor: Optional[str] = None
+    assigned_shifts: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+# ===================== MARSHAL AUTH MODELS =====================
+class MarshalRole(str, Enum):
+    CHIEF_MARSHAL = "chief_marshal"
+    AREA_SUPERVISOR = "area_supervisor"
+    ADMIN = "admin"
+    VIEWER = "viewer"
+
+class MarshalUser(BaseModel):
+    marshal_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    username: str
+    password_hash: str
+    full_name: str
+    role: MarshalRole
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_login: Optional[datetime] = None
+
+class MarshalUserCreate(BaseModel):
+    username: str
+    password: str
+    full_name: str
+    role: str
+
+class MarshalLogin(BaseModel):
+    username: str
+    password: str
+
+class MarshalSession(BaseModel):
+    session_id: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+    marshal_id: str
+    username: str
+    role: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=8))
+
+# ===================== ATTENDANCE MODELS =====================
+class AttendanceStatus(str, Enum):
+    PRESENT = "present"
+    ABSENT = "absent"
+    LATE = "late"
+
+class AttendanceRecord(BaseModel):
+    attendance_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    volunteer_id: str
+    date: str  # YYYY-MM-DD format
+    status: AttendanceStatus
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    marked_by: str  # marshal_id who marked
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ===================== AUTH HELPERS =====================
 async def get_session_from_request(request: Request) -> Optional[dict]:
     """Extract and validate session from cookies or Authorization header"""
