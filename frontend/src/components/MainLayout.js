@@ -37,18 +37,19 @@ const socialLinks = [
 
 const navItems = [
   { name: 'Home', path: '/' },
-  { name: 'Tournament', path: '/tournament' },
   { name: 'Leaderboard', path: '/leaderboard' },
   { name: 'Tickets', path: '/tickets' },
-  { name: 'Travel', path: '/travel' },
-  { name: 'Media', path: '/media' },
+  { name: 'Hall of Fame', path: '/hall-of-fame' },
+  { name: 'News', path: '/news' },
+  { name: 'History', path: '/about' },
+  { name: 'About KOGL', path: '/about-kogl' },
   { 
     name: 'More', 
     children: [
-      { name: 'News', path: '/news' },
+      { name: 'Tournament Info', path: '/tournament' },
+      { name: 'Travel', path: '/travel' },
+      { name: 'Media', path: '/media' },
       { name: 'Gallery', path: '/gallery' },
-      { name: 'About Tournament', path: '/about' },
-      { name: 'About KOGL', path: '/about-kogl' },
       { name: 'Contact', path: '/contact' },
     ]
   },
@@ -252,33 +253,33 @@ export default function MainLayout() {
         <Outlet />
       </main>
 
-      {/* Footer */}
-      <footer className="bg-primary text-primary-foreground" data-testid="main-footer">
-        <div className="container-custom py-16">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12">
+      {/* Footer - Improved spacing and readability */}
+      <footer className="bg-[#373A36] text-white" data-testid="main-footer">
+        <div className="container-custom py-20">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-16">
             {/* Brand */}
             <div>
               <img 
                 src={MKO_LOGO_URL} 
                 alt="Magical Kenya Open" 
-                className="h-16 w-auto mb-6 brightness-0 invert"
+                className="h-20 w-auto mb-8 brightness-0 invert"
               />
-              <p className="text-primary-foreground/70 font-body text-sm leading-relaxed mb-4">
+              <p className="text-white/70 font-body text-base leading-relaxed mb-6">
                 Experience world-class golf in the heart of Kenya. A DP World Tour event showcasing Africa's finest golfing talent.
               </p>
               {/* Social Links */}
-              <div className="flex gap-3">
+              <div className="flex gap-4">
                 {socialLinks.map((social) => (
                   <a
                     key={social.name}
                     href={social.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-9 h-9 bg-primary-foreground/10 flex items-center justify-center hover:bg-primary-foreground/20 transition-colors"
+                    className="w-11 h-11 bg-white/10 rounded flex items-center justify-center hover:bg-[#D50032] transition-colors"
                     data-testid={`social-${social.name.toLowerCase()}`}
                     title={social.name}
                   >
-                    <social.icon className="w-4 h-4" />
+                    <social.icon className="w-5 h-5" />
                   </a>
                 ))}
               </div>
@@ -286,13 +287,13 @@ export default function MainLayout() {
 
             {/* Quick Links */}
             <div>
-              <h4 className="font-subheading font-bold uppercase tracking-wider text-sm mb-6">Quick Links</h4>
-              <ul className="space-y-3">
+              <h4 className="font-subheading font-bold uppercase tracking-wider text-base mb-8 text-white">Quick Links</h4>
+              <ul className="space-y-4">
                 {['Tournament', 'Leaderboard', 'Tickets', 'News'].map((item) => (
                   <li key={item}>
                     <Link 
                       to={`/${item.toLowerCase()}`}
-                      className="text-primary-foreground/70 hover:text-primary-foreground text-sm font-body transition-colors"
+                      className="text-white/70 hover:text-[#D50032] text-base font-body transition-colors"
                     >
                       {item}
                     </Link>
@@ -303,13 +304,13 @@ export default function MainLayout() {
 
             {/* Information */}
             <div>
-              <h4 className="font-subheading font-bold uppercase tracking-wider text-sm mb-6">Information</h4>
-              <ul className="space-y-3">
+              <h4 className="font-subheading font-bold uppercase tracking-wider text-base mb-8 text-white">Information</h4>
+              <ul className="space-y-4">
                 {['About Tournament', 'About KOGL', 'Media', 'Contact'].map((item) => (
                   <li key={item}>
                     <Link 
                       to={`/${item.toLowerCase().replace(' ', '-')}`}
-                      className="text-primary-foreground/70 hover:text-primary-foreground text-sm font-body transition-colors"
+                      className="text-white/70 hover:text-[#D50032] text-base font-body transition-colors"
                     >
                       {item}
                     </Link>
@@ -320,24 +321,24 @@ export default function MainLayout() {
 
             {/* Contact */}
             <div>
-              <h4 className="font-subheading font-bold uppercase tracking-wider text-sm mb-6">Contact</h4>
-              <address className="not-italic text-primary-foreground/70 text-sm font-body space-y-2">
+              <h4 className="font-subheading font-bold uppercase tracking-wider text-base mb-8 text-white">Contact</h4>
+              <address className="not-italic text-white/70 text-base font-body space-y-3">
                 <p>Kenya Open Golf Limited</p>
                 <p>Nairobi, Kenya</p>
-                <p className="pt-2">
-                  <a href="mailto:info@magicalkenyaopen.com" className="hover:text-primary-foreground transition-colors">
+                <p className="pt-3">
+                  <a href="mailto:info@magicalkenyaopen.com" className="hover:text-[#D50032] transition-colors">
                     info@magicalkenyaopen.com
                   </a>
                 </p>
               </address>
               {/* Admin Login Link */}
-              <div className="mt-6 pt-4 border-t border-primary-foreground/20">
+              <div className="mt-8 pt-6 border-t border-white/20">
                 <Link 
                   to="/registration"
-                  className="inline-flex items-center gap-2 text-primary-foreground/50 hover:text-primary-foreground text-xs font-body transition-colors"
+                  className="inline-flex items-center gap-2 text-white/50 hover:text-[#D50032] text-sm font-body transition-colors"
                   data-testid="admin-login-link"
                 >
-                  <Shield className="w-3 h-3" />
+                  <Shield className="w-4 h-4" />
                   Admin Login
                 </Link>
               </div>
@@ -345,15 +346,15 @@ export default function MainLayout() {
           </div>
 
           {/* Bottom */}
-          <div className="border-t border-primary-foreground/20 mt-12 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-primary-foreground/50 text-xs font-body">
+          <div className="border-t border-white/20 mt-16 pt-10 flex flex-col md:flex-row justify-between items-center gap-6">
+            <p className="text-white/50 text-sm font-body">
               © {new Date().getFullYear()} Kenya Open Golf Limited. All rights reserved.
             </p>
-            <div className="flex items-center gap-6">
-              <a href="#" className="text-primary-foreground/50 hover:text-primary-foreground text-xs font-body transition-colors">
+            <div className="flex items-center gap-8">
+              <a href="#" className="text-white/50 hover:text-white text-sm font-body transition-colors">
                 Privacy Policy
               </a>
-              <a href="#" className="text-primary-foreground/50 hover:text-primary-foreground text-xs font-body transition-colors">
+              <a href="#" className="text-white/50 hover:text-white text-sm font-body transition-colors">
                 Terms of Service
               </a>
             </div>

@@ -25,43 +25,73 @@ import {
 const KOGL_BG = "https://images.pexels.com/photos/1325744/pexels-photo-1325744.jpeg";
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
 
-// Board Members
+// Board Members with photos
 const boardMembers = [
   { 
-    name: 'Peter Kanyago', 
+    name: 'Patrick Obath', 
     role: 'Chairman', 
-    bio: 'Leading the strategic direction of KOGL with over 20 years of experience in sports administration.',
-    image: null
+    bio: 'Leading the strategic direction of KOGL with extensive experience in sports administration and business leadership.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/griywsas_ptrcik%20obath.jpg'
   },
   { 
-    name: 'Francis Njogu', 
-    role: 'Vice Chairman', 
-    bio: 'Overseeing tournament operations and player relations.',
-    image: null
+    name: 'Lucas Maranga', 
+    role: 'Tournament Director', 
+    bio: 'Overseeing tournament operations and ensuring world-class delivery of the Magical Kenya Open.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/xt421cfd_lucasmaranga.jpg'
   },
   { 
-    name: 'Susan Mwangi', 
-    role: 'Secretary', 
-    bio: 'Managing corporate governance and stakeholder communications.',
-    image: null
+    name: 'Francis Okwara', 
+    role: 'Tournament Director - Safari Tour', 
+    bio: 'Managing the Safari Tour circuit and regional golf development initiatives.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/gv47en1e_francis%20okwara.jpeg'
   },
   { 
-    name: 'John Kariuki', 
-    role: 'Treasurer', 
-    bio: 'Responsible for financial oversight and budget management.',
-    image: null
+    name: 'Collins Ojiambo', 
+    role: 'Technology & Innovation Director', 
+    bio: 'Driving digital transformation and technology integration across tournament operations.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/eehs3dfr_collins.jpg'
   },
   { 
-    name: 'David Odhiambo', 
-    role: 'Director - Marketing', 
-    bio: 'Driving brand partnerships and sponsorship relationships.',
-    image: null
+    name: 'Ronald Meru', 
+    role: 'Commercial Director', 
+    bio: 'Responsible for commercial partnerships, sponsorships, and revenue generation.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/3a1adffw_Ronald%20meru.jpg'
   },
   { 
-    name: 'Grace Wanjiku', 
-    role: 'Director - Operations', 
-    bio: 'Coordinating tournament logistics and venue management.',
-    image: null
+    name: 'Zuhura Odhiamba', 
+    role: 'PR & Marketing', 
+    bio: 'Managing public relations, communications, and marketing strategies.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/yzs3uiq8_zuhura.jpg'
+  },
+  { 
+    name: 'Regina Gachora', 
+    role: 'Hospitality & Liaison', 
+    bio: 'Coordinating hospitality services and stakeholder relations.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/ljwqc7bo_regina%20Gachora.jpg'
+  },
+  { 
+    name: 'Peter Mungai', 
+    role: 'Finance Director', 
+    bio: 'Overseeing financial management, budgeting, and fiscal accountability for KOGL operations.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/izvnvsi1_peter%20mungai.jpg'
+  },
+  { 
+    name: 'Faith Kanaga', 
+    role: 'Legal Director', 
+    bio: 'Managing legal affairs, contracts, and regulatory compliance for the organization.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/emueub5g_faith%20kanaga.jpg'
+  },
+  { 
+    name: 'Chris Kinuthia', 
+    role: 'Chairman - KGU', 
+    bio: 'Representing the Kenya Golf Union and ensuring alignment with national golf development.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/hnidy6j9_chris%20kinuthia.jpg'
+  },
+  { 
+    name: 'Brian Akun', 
+    role: 'Vice Chairman - KGU', 
+    bio: 'Supporting KGU initiatives and promoting amateur golf in Kenya.',
+    image: 'https://customer-assets.emergentagent.com/job_3abca89a-875f-4d6d-ae25-9400a3d5967a/artifacts/xqxqo29k_Biran%20akun.jpg'
   }
 ];
 
@@ -325,9 +355,17 @@ export default function AboutKOGLPage() {
                 {boardMembers.map((member, i) => (
                   <Card key={i} className="card-default hover-lift" data-testid={`board-member-${i}`}>
                     <CardContent className="p-6 text-center">
-                      <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Users className="w-8 h-8 text-primary" />
-                      </div>
+                      {member.image ? (
+                        <img 
+                          src={member.image} 
+                          alt={member.name}
+                          className="w-24 h-24 rounded-full object-cover mx-auto mb-4 border-4 border-primary/20 shadow-lg"
+                        />
+                      ) : (
+                        <div className="w-24 h-24 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <Users className="w-10 h-10 text-primary" />
+                        </div>
+                      )}
                       <h3 className="font-heading text-lg font-bold">{member.name}</h3>
                       <Badge variant="outline" className="mt-2 mb-3">{member.role}</Badge>
                       <p className="text-muted-foreground font-body text-sm">{member.bio}</p>

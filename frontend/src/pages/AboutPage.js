@@ -59,7 +59,7 @@ export default function AboutPage() {
                   tournament has grown to become a highlight of the international golfing calendar.
                 </p>
                 <p className="mb-4">
-                  Hosted at the iconic Muthaiga Golf Club in Nairobi, the event combines 
+                  Hosted at the prestigious Karen Country Club in Nairobi, the event combines 
                   world-class competitive golf with the unique charm and beauty of Kenya, 
                   offering players and spectators an unforgettable experience.
                 </p>
@@ -88,7 +88,7 @@ export default function AboutPage() {
               <Card className="card-default">
                 <CardContent className="p-6 text-center">
                   <Star className="w-10 h-10 text-accent mx-auto mb-3" />
-                  <div className="font-subheading text-3xl font-bold text-primary">$2M</div>
+                  <div className="font-subheading text-3xl font-bold text-primary">$2.7M</div>
                   <div className="text-sm text-muted-foreground">Prize Fund</div>
                 </CardContent>
               </Card>

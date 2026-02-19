@@ -51,13 +51,23 @@ import {
   GripVertical,
   ToggleLeft,
   ToggleRight,
-  Key
+  Key,
+  LayoutDashboard,
+  Shield,
+  Filter,
+  MapPin,
+  UserCog,
+  Save,
+  Play,
+  SlidersHorizontal
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
 
 const roleLabels = {
   chief_marshal: 'Chief Marshal',
+  cio: 'CIO',
   tournament_director: 'Tournament Director',
   operations_manager: 'Operations Manager',
   area_supervisor: 'Area Supervisor',
@@ -142,6 +152,34 @@ export default function MarshalDashboardPage() {
   const [newField, setNewField] = useState({ 
     name: '', label: '', field_type: 'text', required: false, is_active: true, options: '', placeholder: '', help_text: '' 
   });
+
+  // ===== QUERY ENGINE STATE =====
+  const [queryFilters, setQueryFilters] = useState({
+    role: '',
+    status: 'approved',
+    days: [],
+    time_slots: [],
+    karen_member: null,
+    nationality: '',
+    volunteered_before: null,
+    search: '',
+    unassigned_only: false
+  });
+  const [queryResults, setQueryResults] = useState(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [selectedQueryVolunteers, setSelectedQueryVolunteers] = useState([]);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [queryLocations, setQueryLocations] = useState([]);
+  const [querySupervisors, setQuerySupervisors] = useState([]);
+  const [queryPresets, setQueryPresets] = useState([]);
+  const [assignmentData, setAssignmentData] = useState({
+    location: '',
+    supervisor: '',
+    shifts: [],
+    notes: ''
+  });
+  const [showSavePresetModal, setShowSavePresetModal] = useState(false);
+  const [newPreset, setNewPreset] = useState({ name: '', description: '' });
 
   const getAuthHeaders = () => {
     const sessionId = localStorage.getItem('marshal_session');
@@ -270,7 +308,7 @@ export default function MarshalDashboardPage() {
   };
 
   useEffect(() => {
-    if (activeTab === 'users' && (user?.role === 'chief_marshal' || user?.role === 'tournament_director')) {
+    if (activeTab === 'users' && (user?.role === 'chief_marshal' || user?.role === 'cio' || user?.role === 'tournament_director')) {
       fetchMarshalUsers();
     }
   }, [activeTab, user]);
@@ -329,6 +367,29 @@ export default function MarshalDashboardPage() {
       }
     } catch {
       toast.error('Failed to reject volunteer');
+    }
+  };
+
+  const handleDeleteVolunteer = async (volunteerId, volunteerName) => {
+    if (!window.confirm(`Are you sure you want to permanently delete ${volunteerName}? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const response = await fetch(`${API}/marshal/volunteers/${volunteerId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (response.ok) {
+        const data = await response.json();
+        toast.success(data.message || 'Volunteer deleted');
+        fetchData();
+        setShowVolunteerModal(false);
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || 'Failed to delete volunteer');
+      }
+    } catch {
+      toast.error('Failed to delete volunteer');
     }
   };
 
@@ -537,18 +598,340 @@ export default function MarshalDashboardPage() {
     }
   };
 
-  const handleExportVolunteers = () => {
-    window.open(`${API}/marshal/export/volunteers?format=csv`, '_blank');
+  const handleExportVolunteers = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/export/volunteers?format=csv`, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'volunteers.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Volunteers exported successfully');
+    } catch (error) {
+      toast.error('Failed to export volunteers');
+    }
   };
 
-  const handleExportAttendance = () => {
-    window.open(`${API}/marshal/export/attendance/${attendanceDate}`, '_blank');
+  const handleExportAttendance = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/export/attendance/${attendanceDate}`, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance_${attendanceDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Attendance exported successfully');
+    } catch (error) {
+      toast.error('Failed to export attendance');
+    }
   };
 
-  const canEdit = ['chief_marshal', 'admin', 'tournament_director', 'operations_manager'].includes(user?.role);
-  const canManageUsers = ['chief_marshal', 'tournament_director'].includes(user?.role);
-  const canManageForms = ['chief_marshal', 'admin', 'tournament_director'].includes(user?.role);
+  // ===== QUERY ENGINE FUNCTIONS =====
+  const fetchQueryLocations = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/assignment-locations`, { headers: getAuthHeaders() });
+      if (response.ok) {
+        const data = await response.json();
+        setQueryLocations(data.locations || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch locations:', error);
+    }
+  };
+
+  const fetchQuerySupervisors = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/assignment-supervisors`, { headers: getAuthHeaders() });
+      if (response.ok) {
+        const data = await response.json();
+        setQuerySupervisors(data.supervisors || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch supervisors:', error);
+    }
+  };
+
+  const fetchQueryPresets = async () => {
+    try {
+      const response = await fetch(`${API}/marshal/query-presets`, { headers: getAuthHeaders() });
+      if (response.ok) {
+        const data = await response.json();
+        setQueryPresets(data.presets || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch presets:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'query-engine' && user) {
+      fetchQueryLocations();
+      fetchQuerySupervisors();
+      fetchQueryPresets();
+    }
+  }, [activeTab, user]);
+
+  const executeQuery = async () => {
+    setQueryLoading(true);
+    setSelectedQueryVolunteers([]);
+    try {
+      // Clean up filters - remove empty values
+      const cleanFilters = {};
+      if (queryFilters.role) cleanFilters.role = queryFilters.role;
+      if (queryFilters.status) cleanFilters.status = queryFilters.status;
+      if (queryFilters.days?.length > 0) cleanFilters.days = queryFilters.days;
+      if (queryFilters.time_slots?.length > 0) cleanFilters.time_slots = queryFilters.time_slots;
+      if (queryFilters.karen_member !== null) cleanFilters.karen_member = queryFilters.karen_member;
+      if (queryFilters.nationality) cleanFilters.nationality = queryFilters.nationality;
+      if (queryFilters.volunteered_before !== null) cleanFilters.volunteered_before = queryFilters.volunteered_before;
+      if (queryFilters.search) cleanFilters.search = queryFilters.search;
+      if (queryFilters.unassigned_only) cleanFilters.unassigned_only = true;
+
+      const response = await fetch(`${API}/marshal/volunteers/query`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanFilters)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setQueryResults(data);
+        toast.success(`Found ${data.total} volunteers matching your criteria`);
+      } else {
+        toast.error('Query failed');
+      }
+    } catch (error) {
+      toast.error('Failed to execute query');
+      console.error(error);
+    } finally {
+      setQueryLoading(false);
+    }
+  };
+
+  const handleSelectAllQuery = (checked) => {
+    if (checked) {
+      setSelectedQueryVolunteers(queryResults?.volunteers?.map(v => v.volunteer_id) || []);
+    } else {
+      setSelectedQueryVolunteers([]);
+    }
+  };
+
+  const handleSelectQueryVolunteer = (volunteerId, checked) => {
+    if (checked) {
+      setSelectedQueryVolunteers(prev => [...prev, volunteerId]);
+    } else {
+      setSelectedQueryVolunteers(prev => prev.filter(id => id !== volunteerId));
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    if (selectedQueryVolunteers.length === 0) {
+      toast.error('Please select volunteers to assign');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API}/marshal/volunteers/bulk-assign`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          volunteer_ids: selectedQueryVolunteers,
+          location: assignmentData.location,
+          supervisor: assignmentData.supervisor,
+          shifts: assignmentData.shifts,
+          notes: assignmentData.notes
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        toast.success(data.message);
+        setShowAssignModal(false);
+        setSelectedQueryVolunteers([]);
+        setAssignmentData({ location: '', supervisor: '', shifts: [], notes: '' });
+        executeQuery(); // Refresh results
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || 'Assignment failed');
+      }
+    } catch (error) {
+      toast.error('Failed to assign volunteers');
+    }
+  };
+
+  const handleExportQueryResults = async () => {
+    if (!queryResults || queryResults.total === 0) {
+      toast.error('No results to export');
+      return;
+    }
+
+    try {
+      // Clean up filters
+      const cleanFilters = {};
+      if (queryFilters.role) cleanFilters.role = queryFilters.role;
+      if (queryFilters.status) cleanFilters.status = queryFilters.status;
+      if (queryFilters.days?.length > 0) cleanFilters.days = queryFilters.days;
+      if (queryFilters.time_slots?.length > 0) cleanFilters.time_slots = queryFilters.time_slots;
+      if (queryFilters.karen_member !== null) cleanFilters.karen_member = queryFilters.karen_member;
+      if (queryFilters.nationality) cleanFilters.nationality = queryFilters.nationality;
+      if (queryFilters.volunteered_before !== null) cleanFilters.volunteered_before = queryFilters.volunteered_before;
+      if (queryFilters.search) cleanFilters.search = queryFilters.search;
+      if (queryFilters.unassigned_only) cleanFilters.unassigned_only = true;
+
+      const response = await fetch(`${API}/marshal/volunteers/export-query?format=csv`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanFilters)
+      });
+
+      if (!response.ok) throw new Error('Export failed');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `query_results_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Query results exported successfully');
+    } catch (error) {
+      toast.error('Failed to export query results');
+    }
+  };
+
+  const applyPreset = (preset) => {
+    const filters = preset.filters || {};
+    setQueryFilters({
+      role: filters.role || '',
+      status: filters.status || 'approved',
+      days: filters.days || [],
+      time_slots: filters.time_slots || [],
+      karen_member: filters.karen_member !== undefined ? filters.karen_member : null,
+      nationality: filters.nationality || '',
+      volunteered_before: filters.volunteered_before !== undefined ? filters.volunteered_before : null,
+      search: filters.search || '',
+      unassigned_only: filters.unassigned_only || false
+    });
+    toast.success(`Loaded preset: ${preset.name}`);
+  };
+
+  const handleSavePreset = async () => {
+    if (!newPreset.name) {
+      toast.error('Preset name is required');
+      return;
+    }
+
+    try {
+      const cleanFilters = {};
+      if (queryFilters.role) cleanFilters.role = queryFilters.role;
+      if (queryFilters.status) cleanFilters.status = queryFilters.status;
+      if (queryFilters.days?.length > 0) cleanFilters.days = queryFilters.days;
+      if (queryFilters.time_slots?.length > 0) cleanFilters.time_slots = queryFilters.time_slots;
+      if (queryFilters.karen_member !== null) cleanFilters.karen_member = queryFilters.karen_member;
+      if (queryFilters.nationality) cleanFilters.nationality = queryFilters.nationality;
+      if (queryFilters.volunteered_before !== null) cleanFilters.volunteered_before = queryFilters.volunteered_before;
+      if (queryFilters.unassigned_only) cleanFilters.unassigned_only = true;
+
+      const response = await fetch(`${API}/marshal/query-presets`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newPreset.name,
+          description: newPreset.description,
+          filters: cleanFilters
+        })
+      });
+
+      if (response.ok) {
+        toast.success('Query preset saved');
+        setShowSavePresetModal(false);
+        setNewPreset({ name: '', description: '' });
+        fetchQueryPresets();
+      } else {
+        toast.error('Failed to save preset');
+      }
+    } catch (error) {
+      toast.error('Failed to save preset');
+    }
+  };
+
+  const handleDeletePreset = async (presetId) => {
+    if (!window.confirm('Delete this preset?')) return;
+
+    try {
+      const response = await fetch(`${API}/marshal/query-presets/${presetId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+
+      if (response.ok) {
+        toast.success('Preset deleted');
+        fetchQueryPresets();
+      }
+    } catch (error) {
+      toast.error('Failed to delete preset');
+    }
+  };
+
+  const resetQueryFilters = () => {
+    setQueryFilters({
+      role: '',
+      status: 'approved',
+      days: [],
+      time_slots: [],
+      karen_member: null,
+      nationality: '',
+      volunteered_before: null,
+      search: '',
+      unassigned_only: false
+    });
+    setQueryResults(null);
+    setSelectedQueryVolunteers([]);
+  };
+
+  const toggleDayFilter = (day) => {
+    setQueryFilters(prev => ({
+      ...prev,
+      days: prev.days.includes(day)
+        ? prev.days.filter(d => d !== day)
+        : [...prev.days, day]
+    }));
+  };
+
+  const toggleTimeSlot = (slot) => {
+    setQueryFilters(prev => ({
+      ...prev,
+      time_slots: prev.time_slots.includes(slot)
+        ? prev.time_slots.filter(s => s !== slot)
+        : [...prev.time_slots, slot]
+    }));
+  };
+
+  const canEdit = ['chief_marshal', 'cio', 'admin', 'tournament_director', 'operations_manager'].includes(user?.role);
+  const canManageUsers = ['chief_marshal', 'cio', 'tournament_director'].includes(user?.role);
+  const canManageForms = ['chief_marshal', 'cio', 'admin', 'tournament_director'].includes(user?.role);
   const canMarkAttendance = user?.role !== 'viewer';
+  const canAssignVolunteers = ['chief_marshal', 'cio', 'admin', 'operations_manager'].includes(user?.role);
 
   if (loading) {
     return (
@@ -580,6 +963,20 @@ export default function MarshalDashboardPage() {
               <p className="text-sm font-medium">{user?.full_name}</p>
               <Badge variant="secondary" className="text-xs">{roleLabels[user?.role] || user?.role}</Badge>
             </div>
+            <Link to="/operations-dashboard">
+              <Button variant="secondary" size="sm" className="gap-2">
+                <LayoutDashboard className="w-4 h-4" />
+                <span className="hidden md:inline">Operations</span>
+              </Button>
+            </Link>
+            {user?.role === 'cio' && (
+              <Link to="/super-admin-dashboard">
+                <Button variant="default" size="sm" className="gap-2 bg-amber-600 hover:bg-amber-700">
+                  <Shield className="w-4 h-4" />
+                  <span className="hidden md:inline">Super Admin</span>
+                </Button>
+              </Link>
+            )}
             <Button variant="ghost" size="sm" onClick={handleLogout} className="text-primary-foreground">
               <LogOut className="w-4 h-4" />
             </Button>
@@ -596,6 +993,9 @@ export default function MarshalDashboardPage() {
             </TabsTrigger>
             <TabsTrigger value="volunteers" className="gap-2">
               <Users className="w-4 h-4" /> Volunteers
+            </TabsTrigger>
+            <TabsTrigger value="query-engine" className="gap-2">
+              <SlidersHorizontal className="w-4 h-4" /> Query Engine
             </TabsTrigger>
             <TabsTrigger value="attendance" className="gap-2">
               <ClipboardCheck className="w-4 h-4" /> Attendance
@@ -836,6 +1236,17 @@ export default function MarshalDashboardPage() {
                                   </Button>
                                 </>
                               )}
+                              {canEdit && (
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  onClick={() => handleDeleteVolunteer(vol.volunteer_id, `${vol.first_name} ${vol.last_name}`)}
+                                  title="Delete volunteer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -953,6 +1364,321 @@ export default function MarshalDashboardPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Query Engine Tab */}
+          <TabsContent value="query-engine">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+              {/* Filters Panel */}
+              <Card className="lg:col-span-1">
+                <CardHeader className="pb-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Filter className="w-5 h-5" /> Filters
+                    </CardTitle>
+                    <Button variant="ghost" size="sm" onClick={resetQueryFilters}>
+                      <RefreshCw className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Quick Presets */}
+                  {queryPresets.length > 0 && (
+                    <div>
+                      <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Quick Presets</Label>
+                      <div className="space-y-1">
+                        {queryPresets.slice(0, 5).map(preset => (
+                          <Button
+                            key={preset.preset_id}
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start text-xs h-8"
+                            onClick={() => applyPreset(preset)}
+                          >
+                            <Play className="w-3 h-3 mr-2" /> {preset.name}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Role Filter */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Volunteer Type</Label>
+                    <Select value={queryFilters.role || 'all'} onValueChange={(v) => setQueryFilters(prev => ({...prev, role: v === 'all' ? '' : v}))}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Types" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Types</SelectItem>
+                        <SelectItem value="scorer">Scorers Only</SelectItem>
+                        <SelectItem value="marshal">Marshals Only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Status</Label>
+                    <Select value={queryFilters.status || 'all'} onValueChange={(v) => setQueryFilters(prev => ({...prev, status: v === 'all' ? '' : v}))}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Day of Volunteering - Multi-select */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Day of Volunteering</Label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {['thursday', 'friday', 'saturday', 'sunday'].map((day) => (
+                        <Button
+                          key={day}
+                          variant={queryFilters.days.includes(day) ? 'default' : 'outline'}
+                          size="sm"
+                          className="text-xs capitalize"
+                          onClick={() => toggleDayFilter(day)}
+                        >
+                          {day.slice(0, 3)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Time Slot - Drill-down */}
+                  {queryFilters.days.length > 0 && (
+                    <div>
+                      <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Time Slot</Label>
+                      <div className="space-y-2">
+                        {['morning', 'afternoon', 'all_day'].map((slot) => (
+                          <Button
+                            key={slot}
+                            variant={queryFilters.time_slots.includes(slot) ? 'default' : 'outline'}
+                            size="sm"
+                            className="w-full text-xs capitalize"
+                            onClick={() => toggleTimeSlot(slot)}
+                          >
+                            {slot === 'all_day' ? 'All Day' : slot === 'morning' ? 'AM' : 'PM'}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Karen Membership */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Karen Membership</Label>
+                    <Select 
+                      value={queryFilters.karen_member === null ? 'all' : queryFilters.karen_member ? 'yes' : 'no'} 
+                      onValueChange={(v) => setQueryFilters(prev => ({
+                        ...prev, 
+                        karen_member: v === 'all' ? null : v === 'yes'
+                      }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Members" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Members</SelectItem>
+                        <SelectItem value="yes">Karen Members Only</SelectItem>
+                        <SelectItem value="no">Non-Karen Members</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Nationality */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Nationality</Label>
+                    <Select value={queryFilters.nationality || 'all'} onValueChange={(v) => setQueryFilters(prev => ({...prev, nationality: v === 'all' ? '' : v}))}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Nationalities" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Nationalities</SelectItem>
+                        <SelectItem value="kenyan">Kenyan</SelectItem>
+                        <SelectItem value="non_kenyan">Non-Kenyan</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Previous Experience */}
+                  <div>
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Experience</Label>
+                    <Select 
+                      value={queryFilters.volunteered_before === null ? 'all' : queryFilters.volunteered_before ? 'yes' : 'no'} 
+                      onValueChange={(v) => setQueryFilters(prev => ({
+                        ...prev, 
+                        volunteered_before: v === 'all' ? null : v === 'yes'
+                      }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Experience Levels" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Experience Levels</SelectItem>
+                        <SelectItem value="yes">Has Volunteered Before</SelectItem>
+                        <SelectItem value="no">First-time Volunteer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Unassigned Only */}
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="unassigned" 
+                      checked={queryFilters.unassigned_only}
+                      onCheckedChange={(checked) => setQueryFilters(prev => ({...prev, unassigned_only: checked}))}
+                    />
+                    <Label htmlFor="unassigned" className="text-sm">Unassigned Only</Label>
+                  </div>
+
+                  {/* Execute Query Button */}
+                  <Button onClick={executeQuery} className="w-full" disabled={queryLoading}>
+                    {queryLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
+                    Run Query
+                  </Button>
+
+                  {/* Save Preset Button */}
+                  {queryResults && canAssignVolunteers && (
+                    <Button variant="outline" className="w-full" onClick={() => setShowSavePresetModal(true)}>
+                      <Save className="w-4 h-4 mr-2" /> Save as Preset
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Results Panel */}
+              <Card className="lg:col-span-3">
+                <CardHeader>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Users className="w-5 h-5" /> Query Results
+                        {queryResults && (
+                          <Badge variant="secondary">{queryResults.total} found</Badge>
+                        )}
+                      </CardTitle>
+                      {queryResults?.statistics && (
+                        <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                          <span>Marshals: {queryResults.statistics.by_role?.marshals || 0}</span>
+                          <span>Scorers: {queryResults.statistics.by_role?.scorers || 0}</span>
+                          <span>Karen: {queryResults.statistics.karen_members || 0}</span>
+                          <span>Unassigned: {queryResults.statistics.unassigned || 0}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      {selectedQueryVolunteers.length > 0 && canAssignVolunteers && (
+                        <Button onClick={() => setShowAssignModal(true)} size="sm" className="gap-1">
+                          <MapPin className="w-4 h-4" /> Assign ({selectedQueryVolunteers.length})
+                        </Button>
+                      )}
+                      {queryResults && queryResults.total > 0 && (
+                        <Button variant="outline" size="sm" onClick={handleExportQueryResults} className="gap-1">
+                          <Download className="w-4 h-4" /> Export
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {!queryResults ? (
+                    <div className="text-center py-16 text-muted-foreground">
+                      <SlidersHorizontal className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                      <p>Configure filters and click "Run Query" to search volunteers</p>
+                      <p className="text-sm mt-2">Combine multiple criteria for advanced filtering</p>
+                    </div>
+                  ) : queryResults.total === 0 ? (
+                    <div className="text-center py-16 text-muted-foreground">
+                      <Search className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                      <p>No volunteers match your criteria</p>
+                      <p className="text-sm mt-2">Try adjusting your filters</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-muted">
+                          <tr>
+                            <th className="px-4 py-3 w-10">
+                              <Checkbox 
+                                checked={selectedQueryVolunteers.length === queryResults.volunteers.length}
+                                onCheckedChange={handleSelectAllQuery}
+                              />
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Name</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Role</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Golf Club</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Availability</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Status</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Assignment</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {queryResults.volunteers.map((vol) => (
+                            <tr key={vol.volunteer_id} className="border-b hover:bg-muted/50">
+                              <td className="px-4 py-3">
+                                <Checkbox 
+                                  checked={selectedQueryVolunteers.includes(vol.volunteer_id)}
+                                  onCheckedChange={(checked) => handleSelectQueryVolunteer(vol.volunteer_id, checked)}
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <div>
+                                  <p className="font-medium">{vol.first_name} {vol.last_name}</p>
+                                  <p className="text-xs text-muted-foreground">{vol.email}</p>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge variant="outline" className="capitalize">{vol.role}</Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">{vol.golf_club || '-'}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex gap-1">
+                                  {['thursday', 'friday', 'saturday', 'sunday'].map((day, i) => (
+                                    <div
+                                      key={day}
+                                      className={`w-6 h-6 rounded text-[10px] flex items-center justify-center ${
+                                        vol[`availability_${day}`] !== 'not_available' 
+                                          ? 'bg-green-100 text-green-800' 
+                                          : 'bg-gray-100 text-gray-400'
+                                      }`}
+                                      title={`${day}: ${vol[`availability_${day}`]}`}
+                                    >
+                                      {['T', 'F', 'S', 'S'][i]}
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={statusColors[vol.status]}>{vol.status}</Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {vol.assigned_location ? (
+                                  <div>
+                                    <p className="font-medium">{vol.assigned_location}</p>
+                                    {vol.assigned_supervisor && (
+                                      <p className="text-xs text-muted-foreground">{vol.assigned_supervisor}</p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">Unassigned</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           {/* Forms Tab */}
@@ -1170,14 +1896,27 @@ export default function MarshalDashboardPage() {
               </div>
             </div>
           )}
-          <DialogFooter>
-            {canEdit && selectedVolunteer?.status === 'pending' && (
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            {canEdit && selectedVolunteer && (
               <>
-                <Button variant="outline" className="text-red-600" onClick={() => { handleReject(selectedVolunteer.volunteer_id); setShowVolunteerModal(false); }}>
-                  Reject
-                </Button>
-                <Button onClick={() => { handleApprove(selectedVolunteer.volunteer_id); setShowVolunteerModal(false); }}>
-                  Approve
+                {selectedVolunteer.status === 'pending' && (
+                  <>
+                    <Button variant="outline" className="text-red-600" onClick={() => { handleReject(selectedVolunteer.volunteer_id); setShowVolunteerModal(false); }}>
+                      Reject
+                    </Button>
+                    <Button onClick={() => { handleApprove(selectedVolunteer.volunteer_id); setShowVolunteerModal(false); }}>
+                      Approve
+                    </Button>
+                  </>
+                )}
+                <Button 
+                  variant="destructive" 
+                  size="sm"
+                  className="sm:ml-auto"
+                  onClick={() => handleDeleteVolunteer(selectedVolunteer.volunteer_id, `${selectedVolunteer.first_name} ${selectedVolunteer.last_name}`)}
+                  data-testid="delete-volunteer-btn"
+                >
+                  <Trash2 className="w-4 h-4 mr-1" /> Delete Permanently
                 </Button>
               </>
             )}
@@ -1406,6 +2145,137 @@ export default function MarshalDashboardPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowFieldModal(false)}>Cancel</Button>
             <Button onClick={handleAddField}>Add Field</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Assignment Modal */}
+      <Dialog open={showAssignModal} onOpenChange={setShowAssignModal}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MapPin className="w-5 h-5" /> Assign Volunteers
+            </DialogTitle>
+            <DialogDescription>
+              Assign {selectedQueryVolunteers.length} selected volunteer(s) to a location and supervisor.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {/* Location */}
+            <div>
+              <Label htmlFor="assign_location">Location / Zone</Label>
+              <Select value={assignmentData.location} onValueChange={(v) => setAssignmentData(prev => ({...prev, location: v}))}>
+                <SelectTrigger id="assign_location">
+                  <SelectValue placeholder="Select location..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {queryLocations.map(loc => (
+                    <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Supervisor */}
+            <div>
+              <Label htmlFor="assign_supervisor">Supervisor</Label>
+              <Select value={assignmentData.supervisor} onValueChange={(v) => setAssignmentData(prev => ({...prev, supervisor: v}))}>
+                <SelectTrigger id="assign_supervisor">
+                  <SelectValue placeholder="Select supervisor..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {querySupervisors.map((sup, idx) => (
+                    <SelectItem key={sup.marshal_id || idx} value={sup.full_name || sup.username}>
+                      {sup.full_name || sup.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Shifts */}
+            <div>
+              <Label>Shifts</Label>
+              <div className="flex gap-2 mt-2">
+                {['morning', 'afternoon'].map((shift) => (
+                  <Button
+                    key={shift}
+                    variant={assignmentData.shifts.includes(shift) ? 'default' : 'outline'}
+                    size="sm"
+                    className="capitalize"
+                    onClick={() => {
+                      setAssignmentData(prev => ({
+                        ...prev,
+                        shifts: prev.shifts.includes(shift)
+                          ? prev.shifts.filter(s => s !== shift)
+                          : [...prev.shifts, shift]
+                      }));
+                    }}
+                  >
+                    {shift === 'morning' ? 'AM' : 'PM'}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div>
+              <Label htmlFor="assign_notes">Notes (optional)</Label>
+              <Textarea
+                id="assign_notes"
+                value={assignmentData.notes}
+                onChange={(e) => setAssignmentData(prev => ({...prev, notes: e.target.value}))}
+                placeholder="Any special instructions..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAssignModal(false)}>Cancel</Button>
+            <Button onClick={handleBulkAssign}>
+              <UserCheck className="w-4 h-4 mr-2" /> Assign Volunteers
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save Preset Modal */}
+      <Dialog open={showSavePresetModal} onOpenChange={setShowSavePresetModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Save className="w-5 h-5" /> Save Query Preset
+            </DialogTitle>
+            <DialogDescription>
+              Save current filters as a reusable preset for quick access.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="preset_name">Preset Name *</Label>
+              <Input
+                id="preset_name"
+                value={newPreset.name}
+                onChange={(e) => setNewPreset(prev => ({...prev, name: e.target.value}))}
+                placeholder="e.g., Weekend Scorers - AM"
+              />
+            </div>
+            <div>
+              <Label htmlFor="preset_desc">Description (optional)</Label>
+              <Textarea
+                id="preset_desc"
+                value={newPreset.description}
+                onChange={(e) => setNewPreset(prev => ({...prev, description: e.target.value}))}
+                placeholder="Brief description of what this preset filters..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSavePresetModal(false)}>Cancel</Button>
+            <Button onClick={handleSavePreset}>
+              <Save className="w-4 h-4 mr-2" /> Save Preset
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

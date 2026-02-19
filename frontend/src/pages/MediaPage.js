@@ -42,7 +42,7 @@ const mediaResources = [
   },
   {
     title: 'Course Photography',
-    description: 'High-resolution images of Muthaiga Golf Club.',
+    description: 'High-resolution images of Karen Country Club.',
     type: 'ZIP',
     size: '125 MB'
   }

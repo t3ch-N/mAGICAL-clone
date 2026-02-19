@@ -146,7 +146,7 @@ export default function RegistrationPage() {
                     For immediate assistance, please contact:
                   </p>
                   <p className="font-subheading font-semibold text-primary">
-                    info@kenyaopengolf.com
+                    info@magicalkenyaopen.com
                   </p>
                 </div>
                 <p className="text-center text-muted-foreground text-sm font-body">

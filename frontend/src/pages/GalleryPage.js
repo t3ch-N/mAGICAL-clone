@@ -21,8 +21,8 @@ import {
 const mockGalleryItems = [
   {
     item_id: 'gal-1',
-    title: 'Muthaiga Golf Club - Hole 1',
-    description: 'The scenic first hole at Muthaiga Golf Club',
+    title: 'Karen Country Club - Hole 1',
+    description: 'The scenic first hole at Karen Country Club',
     media_url: 'https://images.pexels.com/photos/6256827/pexels-photo-6256827.jpeg',
     content_type: 'photo',
     category: 'course'

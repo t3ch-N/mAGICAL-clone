@@ -190,13 +190,13 @@ export default function VolunteerRegisterPage() {
             <div className="flex flex-wrap justify-center gap-8 md:gap-16">
               <div className="text-center">
                 <div className="font-subheading text-2xl font-bold text-primary">
-                  {stats.marshals.current} / {stats.marshals.minimum}+
+                  {stats.marshals.current} / {stats.marshals.target}
                 </div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground">Marshals Registered</div>
               </div>
               <div className="text-center">
                 <div className="font-subheading text-2xl font-bold text-primary">
-                  {stats.scorers.current} / {stats.scorers.maximum}
+                  {stats.scorers.current} / {stats.scorers.target}
                 </div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground">Scorers Registered</div>
               </div>
@@ -335,7 +335,7 @@ export default function VolunteerRegisterPage() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Note: A maximum of 60 Scorers and a minimum of 150 Marshals are required.
+                        Target: 300 Marshals and 300 Scorers. Registration is open.
                       </p>
                     </div>
                     <div className="flex items-center space-x-2">

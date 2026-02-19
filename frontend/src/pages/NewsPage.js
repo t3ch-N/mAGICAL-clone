@@ -38,49 +38,11 @@ export default function NewsPage() {
       fetch(`${API}/news`)
         .then(r => r.json())
         .then(data => {
-          setArticles(data);
+          setArticles(Array.isArray(data) ? data : []);
           setLoading(false);
         })
         .catch(() => {
-          // Use mock data if no articles
-          setArticles([
-            {
-              article_id: 'mock-1',
-              title: 'Field Announcement: Top European Tour Players Confirmed',
-              excerpt: 'The 2025 Magical Kenya Open will feature an impressive lineup of international golf stars.',
-              content: 'Full article content here...',
-              featured_image: 'https://images.pexels.com/photos/1325744/pexels-photo-1325744.jpeg',
-              category: 'tournament',
-              author_name: 'MKO Press',
-              created_at: '2025-02-15T10:00:00Z',
-              published_at: '2025-02-15T10:00:00Z',
-              tags: ['players', 'announcement']
-            },
-            {
-              article_id: 'mock-2',
-              title: 'Course Preparation Underway at Muthaiga Golf Club',
-              excerpt: 'Ground staff are working around the clock to ensure pristine conditions for the tournament.',
-              content: 'Full article content here...',
-              featured_image: 'https://images.pexels.com/photos/6256827/pexels-photo-6256827.jpeg',
-              category: 'course',
-              author_name: 'MKO Press',
-              created_at: '2025-02-10T10:00:00Z',
-              published_at: '2025-02-10T10:00:00Z',
-              tags: ['course', 'preparation']
-            },
-            {
-              article_id: 'mock-3',
-              title: 'Junior Golf Program: Inspiring the Next Generation',
-              excerpt: 'Over 200 young golfers participated in the pre-tournament development clinics.',
-              content: 'Full article content here...',
-              featured_image: 'https://images.pexels.com/photos/9207751/pexels-photo-9207751.jpeg',
-              category: 'community',
-              author_name: 'MKO Press',
-              created_at: '2025-02-05T10:00:00Z',
-              published_at: '2025-02-05T10:00:00Z',
-              tags: ['junior', 'community']
-            }
-          ]);
+          setArticles([]);
           setLoading(false);
         });
     }
@@ -89,8 +51,10 @@ export default function NewsPage() {
   const categories = ['all', 'tournament', 'players', 'course', 'community'];
 
   const filteredArticles = articles.filter(article => {
-    const matchesSearch = article.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          article.excerpt.toLowerCase().includes(searchTerm.toLowerCase());
+    const title = article.title || '';
+    const excerpt = article.excerpt || article.summary || '';
+    const matchesSearch = title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          excerpt.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = selectedCategory === 'all' || article.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -105,59 +69,73 @@ export default function NewsPage() {
 
   // Single article view
   if (articleId && selectedArticle) {
+    const articleImage = selectedArticle.image_url || selectedArticle.featured_image;
+    const articleAuthor = selectedArticle.author || selectedArticle.author_name || 'MKO Press';
+    const articleExcerpt = selectedArticle.summary || selectedArticle.excerpt || '';
+    
     return (
       <div data-testid="article-page">
-        {/* Hero */}
-        {selectedArticle.featured_image && (
-          <section className="relative h-[50vh] min-h-[400px] flex items-end overflow-hidden">
-            <div 
-              className="absolute inset-0 bg-cover bg-center"
-              style={{ backgroundImage: `url(${selectedArticle.featured_image})` }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
-            <div className="relative z-10 container-custom pb-12">
-              <Link to="/news" className="inline-flex items-center gap-2 text-white/80 hover:text-white mb-4 font-body">
-                <ArrowLeft className="w-4 h-4" /> Back to News
-              </Link>
-              <Badge className="bg-secondary text-white mb-4">{selectedArticle.category}</Badge>
-              <h1 className="font-heading text-3xl md:text-5xl font-bold text-white max-w-4xl">
-                {selectedArticle.title}
-              </h1>
+        {/* Back Navigation */}
+        <div className="container-custom pt-6">
+          <Link to="/news" className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground mb-4 font-body">
+            <ArrowLeft className="w-4 h-4" /> Back to News
+          </Link>
+        </div>
+
+        {/* Article Header */}
+        <section className="container-custom pb-6">
+          <Badge className="bg-primary text-white mb-4">{selectedArticle.category}</Badge>
+          <h1 className="font-heading text-3xl md:text-4xl font-bold max-w-4xl mb-4">
+            {selectedArticle.title}
+          </h1>
+          {/* Meta */}
+          <div className="flex flex-wrap items-center gap-4 text-muted-foreground text-sm">
+            <div className="flex items-center gap-2">
+              <User className="w-4 h-4" />
+              {articleAuthor}
+            </div>
+            <div className="flex items-center gap-2">
+              <Calendar className="w-4 h-4" />
+              {new Date(selectedArticle.created_at || selectedArticle.published_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              })}
+            </div>
+            <Button variant="ghost" size="sm" className="ml-auto gap-2">
+              <Share2 className="w-4 h-4" /> Share
+            </Button>
+          </div>
+        </section>
+
+        {/* Featured Image - Full Width */}
+        {articleImage && (
+          <section className="container-custom pb-8">
+            <div className="rounded-lg overflow-hidden">
+              <img 
+                src={articleImage} 
+                alt={selectedArticle.title}
+                className="w-full h-auto max-h-[500px] object-contain bg-muted"
+                onError={(e) => { e.target.parentElement.style.display = 'none'; }}
+              />
             </div>
           </section>
         )}
 
         {/* Article Content */}
-        <section className="section-spacing">
+        <section className="section-spacing pt-0">
           <div className="container-custom">
             <div className="max-w-3xl mx-auto">
-              {/* Meta */}
-              <div className="flex flex-wrap items-center gap-4 text-muted-foreground text-sm mb-8 pb-8 border-b border-border/40">
-                <div className="flex items-center gap-2">
-                  <User className="w-4 h-4" />
-                  {selectedArticle.author_name}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4" />
-                  {new Date(selectedArticle.published_at || selectedArticle.created_at).toLocaleDateString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric'
-                  })}
-                </div>
-                <Button variant="ghost" size="sm" className="ml-auto gap-2">
-                  <Share2 className="w-4 h-4" /> Share
-                </Button>
-              </div>
-
               {/* Excerpt */}
-              <p className="text-xl font-body text-muted-foreground mb-8 leading-relaxed">
-                {selectedArticle.excerpt}
-              </p>
+              {articleExcerpt && (
+                <p className="text-xl font-body text-muted-foreground mb-8 leading-relaxed border-l-4 border-primary pl-4">
+                  {articleExcerpt}
+                </p>
+              )}
 
               {/* Content */}
               <div className="prose prose-lg font-body max-w-none">
-                <div dangerouslySetInnerHTML={{ __html: selectedArticle.content.replace(/\n/g, '<br/>') }} />
+                <div dangerouslySetInnerHTML={{ __html: selectedArticle.content?.replace(/\n/g, '<br/>') || '' }} />
               </div>
 
               {/* Tags */}
@@ -238,17 +216,18 @@ export default function NewsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               {filteredArticles.map((article) => (
                 <Link 
-                  key={article.article_id} 
-                  to={`/news/${article.article_id}`}
-                  data-testid={`article-card-${article.article_id}`}
+                  key={article.news_id || article.article_id} 
+                  to={`/news/${article.news_id || article.article_id}`}
+                  data-testid={`article-card-${article.news_id || article.article_id}`}
                 >
                   <Card className="card-default group hover-lift h-full overflow-hidden">
-                    {article.featured_image && (
-                      <div className="aspect-video overflow-hidden">
+                    {(article.image_url || article.featured_image) && (
+                      <div className="aspect-video overflow-hidden bg-muted">
                         <img 
-                          src={article.featured_image} 
+                          src={article.image_url || article.featured_image} 
                           alt={article.title}
                           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                          onError={(e) => { e.target.parentElement.style.display = 'none'; }}
                         />
                       </div>
                     )}
@@ -258,16 +237,16 @@ export default function NewsPage() {
                         {article.title}
                       </h3>
                       <p className="text-muted-foreground font-body text-sm line-clamp-3 mb-4">
-                        {article.excerpt}
+                        {article.summary || article.excerpt || article.content?.substring(0, 150) + '...'}
                       </p>
                       <div className="flex items-center gap-4 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <User className="w-3 h-3" />
-                          {article.author_name}
+                          {article.author || article.author_name || 'MKO Press'}
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {new Date(article.published_at || article.created_at).toLocaleDateString()}
+                          {new Date(article.created_at || article.published_at).toLocaleDateString()}
                         </span>
                       </div>
                     </CardContent>

@@ -13,7 +13,19 @@ import {
   Target
 } from 'lucide-react';
 
-const COURSE_BG = "https://images.pexels.com/photos/6256827/pexels-photo-6256827.jpeg";
+const COURSE_BG = "https://www.karencountryclub.org/getmedia/3d060c0f-c792-4a0b-9245-1eea0962a8ad/DJI_1;.aspx?ext=.jpg";
+
+// Past Kenya Open Winners
+const pastWinnersData = [
+  { year: 2025, winner: 'Jacques Kruyswijk', country: 'South Africa', countryCode: 'RSA', score: '-17 (271)', venue: 'Muthaiga Golf Club' },
+  { year: 2024, winner: 'Darius van Driel', country: 'Netherlands', countryCode: 'NED', score: '-20 (268)', venue: 'Muthaiga Golf Club' },
+  { year: 2023, winner: 'Jorge Campillo', country: 'Spain', countryCode: 'ESP', score: '-18 (266)', venue: 'Muthaiga Golf Club' },
+  { year: 2022, winner: 'Wu Ashun', country: 'China', countryCode: 'CHN', score: '-17 (271)', venue: 'Muthaiga Golf Club' },
+  { year: 2021, winner: 'Justin Harding', country: 'South Africa', countryCode: 'RSA', score: '-18 (270)', venue: 'Karen Country Club' },
+  { year: 2019, winner: 'Guido Migliozzi', country: 'Italy', countryCode: 'ITA', score: '-22 (266)', venue: 'Karen Country Club' },
+  { year: 2018, winner: 'Shubhankar Sharma', country: 'India', countryCode: 'IND', score: '-23 (265)', venue: 'Karen Country Club' },
+  { year: 2017, winner: 'Francesco Molinari', country: 'Italy', countryCode: 'ITA', score: '-18 (270)', venue: 'Karen Country Club' },
+];
 
 export default function TournamentPage() {
   const [info, setInfo] = useState(null);
@@ -49,7 +61,7 @@ export default function TournamentPage() {
             The Tournament
           </h1>
           <p className="text-white/80 text-lg font-body max-w-2xl mx-auto">
-            {info?.dates || 'March 6-9, 2025'} • {info?.venue || 'Muthaiga Golf Club'}
+            March 2026 • Karen Country Club
           </p>
         </div>
       </section>
@@ -60,22 +72,22 @@ export default function TournamentPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
             <div>
               <Trophy className="w-6 h-6 mx-auto mb-2 text-accent" />
-              <div className="font-subheading text-xl font-bold">{info?.purse || '$2,000,000'}</div>
+              <div className="font-subheading text-xl font-bold">$2,700,000</div>
               <div className="text-xs uppercase tracking-wider text-primary-foreground/70">Prize Fund</div>
             </div>
             <div>
               <Target className="w-6 h-6 mx-auto mb-2 text-accent" />
-              <div className="font-subheading text-xl font-bold">Par {info?.course_par || 71}</div>
+              <div className="font-subheading text-xl font-bold">Par 72</div>
               <div className="text-xs uppercase tracking-wider text-primary-foreground/70">Course</div>
             </div>
             <div>
               <Flag className="w-6 h-6 mx-auto mb-2 text-accent" />
-              <div className="font-subheading text-xl font-bold">{info?.course_yards || '6,902'}</div>
+              <div className="font-subheading text-xl font-bold">6,818</div>
               <div className="text-xs uppercase tracking-wider text-primary-foreground/70">Yards</div>
             </div>
             <div>
               <Users className="w-6 h-6 mx-auto mb-2 text-accent" />
-              <div className="font-subheading text-xl font-bold">156</div>
+              <div className="font-subheading text-xl font-bold">144</div>
               <div className="text-xs uppercase tracking-wider text-primary-foreground/70">Players</div>
             </div>
           </div>
@@ -99,14 +111,14 @@ export default function TournamentPage() {
                   <h2 className="font-heading text-3xl font-bold mb-6">About the Tournament</h2>
                   <div className="prose prose-lg font-body text-muted-foreground">
                     <p className="mb-4">
-                      The Magical Kenya Open is one of Africa's most prestigious golf tournaments, 
+                      The Magical Kenya Open is one of Africa&apos;s most prestigious golf tournaments, 
                       part of the DP World Tour. Held annually in Kenya, it showcases world-class 
-                      golf while celebrating the country's rich culture and stunning landscapes.
+                      golf while celebrating the country&apos;s rich culture and stunning landscapes.
                     </p>
                     <p className="mb-4">
-                      The tournament attracts top international players and offers a unique 
-                      combination of competitive golf and unforgettable experiences in one of 
-                      the world's most beautiful destinations.
+                      The 2026 edition returns to the iconic Karen Country Club, featuring a 
+                      world-class field of 144 players competing for the $2,700,000 prize fund - 
+                      the largest in the tournament&apos;s history.
                     </p>
                     <p>
                       With its rich history dating back to 1967, the Kenya Open has grown to become 
@@ -118,15 +130,16 @@ export default function TournamentPage() {
                 <div>
                   <Card className="card-default overflow-hidden">
                     <img 
-                      src="https://images.pexels.com/photos/30752232/pexels-photo-30752232.jpeg"
-                      alt="Kenya landscape"
+                      src="https://customer-assets.emergentagent.com/job_mkopen-dashboard/artifacts/9xta5y54_b25lY21zOmJlZGY0NGJiLTBkNzgtNDY0OS05N2NmLTMyMWVhYzE4ODdkYTpkZjQxZWY0MC02MDliLTQ4NTQtYjlhMi03ZWJiZDJiOGZkZjQ%3D.avif"
+                      alt="2025 Champion"
                       className="w-full h-64 object-cover"
                     />
                     <CardContent className="p-6">
-                      <h3 className="font-heading text-xl font-bold mb-2">Defending Champion</h3>
+                      <Badge className="bg-accent text-accent-foreground mb-2">Defending Champion</Badge>
+                      <h3 className="font-heading text-xl font-bold mb-2">Jacques Kruyswijk (RSA)</h3>
                       <p className="text-muted-foreground font-body">
-                        {info?.defending_champion || 'Guido Migliozzi'} returns to defend his title 
-                        at the 2026 Magical Kenya Open.
+                        The 2025 champion returns to defend his title at Karen Country Club. 
+                        Kruyswijk won at Muthaiga with a score of -17 (271).
                       </p>
                     </CardContent>
                   </Card>
@@ -140,7 +153,7 @@ export default function TournamentPage() {
                   <h2 className="font-heading text-3xl font-bold mb-6">Karen Country Club</h2>
                   <div className="prose prose-lg font-body text-muted-foreground">
                     <p className="mb-4">
-                      Karen Country Club, established in 1937, is one of Kenya's most prestigious 
+                      Karen Country Club, established in 1937, is one of Kenya&apos;s most prestigious 
                       golf courses. Located in the beautiful Karen suburb of Nairobi, the club offers a 
                       championship-caliber test of golf in stunning surroundings.
                     </p>
@@ -225,23 +238,22 @@ export default function TournamentPage() {
                         <th className="px-6 py-4 text-left font-subheading font-semibold uppercase tracking-wider">Champion</th>
                         <th className="px-6 py-4 text-left font-subheading font-semibold uppercase tracking-wider">Country</th>
                         <th className="px-6 py-4 text-center font-subheading font-semibold uppercase tracking-wider">Score</th>
+                        <th className="px-6 py-4 text-left font-subheading font-semibold uppercase tracking-wider hidden md:table-cell">Venue</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pastWinners.map((winner, i) => (
+                      {pastWinnersData.map((winner, i) => (
                         <tr key={i} className="border-b border-border/40 hover:bg-muted/50">
                           <td className="px-6 py-4 font-subheading font-bold text-lg">{winner.year}</td>
-                          <td className="px-6 py-4 font-body font-medium">
-                            {winner.winner === 'Cancelled' ? (
-                              <span className="text-muted-foreground italic">Cancelled</span>
-                            ) : (
-                              winner.winner
-                            )}
+                          <td className="px-6 py-4 font-body font-medium">{winner.winner}</td>
+                          <td className="px-6 py-4">
+                            <Badge variant="outline">{winner.countryCode}</Badge>
+                            <span className="ml-2 text-muted-foreground text-sm hidden sm:inline">{winner.country}</span>
                           </td>
-                          <td className="px-6 py-4 text-muted-foreground">{winner.country}</td>
                           <td className="px-6 py-4 text-center font-subheading font-bold text-primary">
                             {winner.score}
                           </td>
+                          <td className="px-6 py-4 text-muted-foreground text-sm hidden md:table-cell">{winner.venue}</td>
                         </tr>
                       ))}
                     </tbody>

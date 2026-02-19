@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { API } from '../App';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
-import { Shield, Loader2, Lock, User } from 'lucide-react';
+import { Shield, Loader2, Lock, User, ArrowLeft } from 'lucide-react';
 import { Helmet } from 'react-helmet';
 
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
@@ -160,10 +160,16 @@ export default function MarshalLoginPage() {
             </Button>
           </form>
           
-          <div className="mt-6 pt-6 border-t border-border text-center">
+          <div className="mt-6 pt-6 border-t border-border text-center space-y-4">
             <p className="text-xs text-muted-foreground">
               This is a restricted area. Unauthorized access is prohibited.
             </p>
+            <Link to="/">
+              <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-primary" data-testid="back-to-home-btn">
+                <ArrowLeft className="w-4 h-4" />
+                Back to Home
+              </Button>
+            </Link>
           </div>
         </CardContent>
       </Card>

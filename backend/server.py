@@ -22,14 +22,15 @@ import bcrypt
 import secrets
 import io
 import csv
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'test_database')]
 
 # Create the main app
 app = FastAPI(title="Magical Kenya Open API")
@@ -48,6 +49,76 @@ POLICIES_DIR.mkdir(exist_ok=True)
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ===================== ETX API CONFIGURATION =====================
+ETX_API_KEY = os.environ.get('ETX_API_KEY', '')
+ETX_SUBSCRIPTION_KEY = os.environ.get('ETX_SUBSCRIPTION_KEY', '')
+ETX_BASE_URL = os.environ.get('ETX_BASE_URL', 'https://etx.europeantour.com/premplus')
+ETX_TOURNAMENT_ID = os.environ.get('ETX_TOURNAMENT_ID', '')  # MKO Tournament ID (e.g., 2019010)
+
+# In-memory cache for ETX API responses
+etx_cache = {
+    'leaderboard': {'data': None, 'expires': None},
+    'tee_times': {'data': None, 'expires': None},
+    'players': {}  # player_id -> {'data': None, 'expires': None}
+}
+ETX_CACHE_TTL = 20  # seconds
+
+def is_etx_configured():
+    """Check if ETX API credentials are configured"""
+    return bool(ETX_API_KEY and ETX_SUBSCRIPTION_KEY and ETX_BASE_URL)
+
+async def fetch_from_etx(endpoint: str, params: dict = None) -> dict:
+    """Fetch data from ETX API with proper headers"""
+    if not is_etx_configured():
+        return None
+    
+    headers = {
+        'Ocp-Apim-Subscription-Key': ETX_SUBSCRIPTION_KEY,
+        'x-api-key': ETX_API_KEY,
+        'Accept': 'application/json'
+    }
+    
+    url = f"{ETX_BASE_URL}{endpoint}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"ETX API HTTP error: {e.response.status_code} - {e.response.text}")
+        return None
+    except httpx.RequestError as e:
+        logger.error(f"ETX API request error: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"ETX API unexpected error: {str(e)}")
+        return None
+
+def get_cached_data(cache_key: str, player_id: str = None):
+    """Get data from cache if not expired"""
+    now = datetime.now(timezone.utc)
+    
+    if player_id:
+        player_cache = etx_cache['players'].get(player_id)
+        if player_cache and player_cache['expires'] and player_cache['expires'] > now:
+            return player_cache['data']
+    else:
+        cache_entry = etx_cache.get(cache_key)
+        if cache_entry and cache_entry['expires'] and cache_entry['expires'] > now:
+            return cache_entry['data']
+    
+    return None
+
+def set_cached_data(cache_key: str, data: any, player_id: str = None):
+    """Store data in cache with TTL"""
+    expires = datetime.now(timezone.utc) + timedelta(seconds=ETX_CACHE_TTL)
+    
+    if player_id:
+        etx_cache['players'][player_id] = {'data': data, 'expires': expires}
+    else:
+        etx_cache[cache_key] = {'data': data, 'expires': expires}
 
 # ===================== EMAIL CONFIG =====================
 SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
@@ -452,6 +523,7 @@ class VolunteerUpdate(BaseModel):
 # ===================== MARSHAL AUTH MODELS =====================
 class MarshalRole(str, Enum):
     CHIEF_MARSHAL = "chief_marshal"
+    CIO = "cio"
     TOURNAMENT_DIRECTOR = "tournament_director"
     OPERATIONS_MANAGER = "operations_manager"
     AREA_SUPERVISOR = "area_supervisor"
@@ -737,6 +809,91 @@ async def require_admin(request: Request) -> User:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+# ===================== MARSHAL AUTH HELPERS =====================
+def hash_password(password: str) -> str:
+    """Hash password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify password against hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+
+async def get_marshal_session(request: Request) -> Optional[dict]:
+    """Get marshal session from cookie or header"""
+    session_token = request.cookies.get("marshal_session")
+    if not session_token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            session_token = auth_header.split(" ")[1]
+    
+    if not session_token:
+        return None
+    
+    session = await db.marshal_sessions.find_one({"session_id": session_token}, {"_id": 0})
+    if not session:
+        return None
+    
+    # Check expiry
+    expires_at = session.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await db.marshal_sessions.delete_one({"session_id": session_token})
+        return None
+    
+    return session
+
+async def require_marshal_auth(request: Request) -> dict:
+    """Require marshal authentication"""
+    session = await get_marshal_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return session
+
+async def require_marshal_role(request: Request, allowed_roles: List[str]) -> dict:
+    """Require specific marshal roles"""
+    session = await require_marshal_auth(request)
+    if session["role"] not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return session
+
+# ===================== WEBMASTER AUTH =====================
+async def get_webmaster_session(request: Request) -> Optional[dict]:
+    """Get webmaster session from cookie or header"""
+    session_token = request.cookies.get("webmaster_session")
+    if not session_token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            session_token = auth_header.split(" ")[1]
+    
+    if not session_token:
+        return None
+    
+    session = await db.webmaster_sessions.find_one({"session_id": session_token}, {"_id": 0})
+    if not session:
+        return None
+    
+    # Check expiry
+    expires_at = session.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        await db.webmaster_sessions.delete_one({"session_id": session_token})
+        return None
+    
+    return session
+
+async def require_webmaster_auth(request: Request) -> dict:
+    """Require webmaster authentication"""
+    session = await get_webmaster_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return session
+
 # ===================== AUTH ROUTES =====================
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
@@ -996,6 +1153,416 @@ async def get_leaderboard():
     
     return entries
 
+# ===================== ETX LIVE LEADERBOARD API =====================
+@api_router.get("/leaderboard/live")
+async def get_live_leaderboard(
+    round_num: Optional[int] = None,
+    country: Optional[str] = None,
+    top: Optional[int] = None
+):
+    cached = get_cached_data('leaderboard')
+    
+    if cached is None and is_etx_configured():
+        etx_data = await fetch_from_etx(f"/inplay/leaderboard/{ETX_TOURNAMENT_ID}")
+        if etx_data:
+            leaderboard = transform_etx_leaderboard(etx_data)
+            set_cached_data('leaderboard', leaderboard)
+            cached = leaderboard
+        else:
+            logger.warning("ETX leaderboard fetch failed")
+    
+    if cached is None:
+        # Fallback logic (unchanged, but add rankings if in local db)
+        logger.info("Using local leaderboard data")
+        entries = await db.leaderboard.find({}, {"_id": 0}).sort("position", 1).to_list(1000)
+        for entry in entries:
+            player = await db.players.find_one({"player_id": entry["player_id"]}, {"_id": 0})
+            if player:
+                entry.update({
+                    "player_name": player.get("name"),
+                    "country": player.get("country"),
+                    "country_code": player.get("country_code"),
+                    "photo_url": player.get("photo_url"),
+                    "owgr": player.get("world_ranking"),
+                    "r2dr": player.get("r2dr") # Add if you store these in db.players
+                })
+        cached = {'source': 'local', 'updated_at': datetime.now(timezone.utc).isoformat(), 'entries': entries}
+    
+    entries = cached.get('entries', [])
+    
+    # Filters (unchanged)
+    if country:
+        entries = [e for e in entries if e.get("country_code", "").upper() == country.upper()]
+    if round_num:
+        entries = [e for e in entries if e.get("current_round") == round_num] # Assume field exists; add if needed
+    if top:
+        entries = entries[:top]
+    
+    for entry in entries:
+        entry["is_kenyan"] = entry.get("country_code", "").upper() == "KEN"
+    
+    return {
+        "source": cached['source'],
+        "updated_at": cached['updated_at'],
+        "tournament_id": ETX_TOURNAMENT_ID,
+        "filters_applied": {"round": round_num, "country": country, "top": top},
+        "total_count": len(entries),
+        "entries": entries
+    }
+
+@api_router.get("/leaderboard/tee-times")
+async def get_tee_times(
+    round_num: Optional[int] = Query(1, ge=1, le=4),
+    date: Optional[str] = None
+):
+    cache_key = f"tee_times_r{round_num}"
+    
+    # Check cache
+    cached = get_cached_data('tee_times')
+    
+    if cached is None and is_etx_configured():
+        # Fetch from ETX API
+        params = {"round": round_num}
+        if date:
+            params["date"] = date
+        
+        etx_data = await fetch_from_etx(f"/event/teetimes/{ETX_TOURNAMENT_ID}/{round_num}", params)
+        
+        if etx_data:
+            tee_times = transform_etx_tee_times(etx_data)
+            set_cached_data('tee_times', tee_times)
+            cached = tee_times
+    
+    # Fallback to local database
+    if cached is None:
+        logger.info("ETX unavailable, using local tee times data")
+        
+        # Get tee times from local database
+        query = {}
+        if round_num:
+            query["round"] = round_num
+        
+        tee_times = await db.tournament_tee_times.find(query, {"_id": 0}).sort("tee_time", 1).to_list(500)
+        
+        # Mark Kenyan players
+        for tt in tee_times:
+            players = tt.get("players", [])
+            for p in players:
+                p["is_kenyan"] = p.get("country_code", "").upper() == "KEN"
+        
+        cached = {
+            "source": "local",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "round": round_num,
+            "tee_times": tee_times
+        }
+    
+    return {
+        "source": cached.get("source", "etx") if isinstance(cached, dict) else "etx",
+        "updated_at": cached.get("updated_at", datetime.now(timezone.utc).isoformat()) if isinstance(cached, dict) else datetime.now(timezone.utc).isoformat(),
+        "tournament_id": ETX_TOURNAMENT_ID or "mko-2025",
+        "round": round_num,
+        "date": date,
+        "tee_times": cached.get("tee_times", []) if isinstance(cached, dict) else cached
+    }
+
+@api_router.get("/leaderboard/player/{player_id}")
+async def get_player_details(player_id: str):
+    """
+    Get detailed player information and scores from ETX API.
+    Falls back to local database if ETX is unavailable.
+    """
+    # Check cache
+    cached = get_cached_data('players', player_id=player_id)
+    
+    if cached is None and is_etx_configured():
+        # Fetch from ETX API
+        etx_data = await fetch_from_etx(f"/players/{player_id}")
+        
+        if etx_data:
+            player_data = transform_etx_player(etx_data)
+            
+            # Also fetch player's tournament scores
+            scores_data = await fetch_from_etx(f"/tournaments/{ETX_TOURNAMENT_ID}/players/{player_id}/scores")
+            if scores_data:
+                player_data["tournament_scores"] = transform_etx_scores(scores_data)
+            
+            set_cached_data('players', player_data, player_id=player_id)
+            cached = player_data
+    
+    # Fallback to local database
+    if cached is None:
+        logger.info(f"ETX unavailable, using local player data for {player_id}")
+        
+        # Try to find player in local database
+        player = await db.players.find_one({"player_id": player_id}, {"_id": 0})
+        
+        if not player:
+            # Try by ETX ID
+            player = await db.players.find_one({"etx_id": player_id}, {"_id": 0})
+        
+        if not player:
+            raise HTTPException(status_code=404, detail="Player not found")
+        
+        # Get player's leaderboard entry
+        leaderboard_entry = await db.leaderboard.find_one({"player_id": player_id}, {"_id": 0})
+        
+        # Get round-by-round scores if available
+        scores = await db.player_scores.find({"player_id": player_id}, {"_id": 0}).sort("round", 1).to_list(4)
+        
+        player["is_kenyan"] = player.get("country_code", "").upper() == "KEN"
+        
+        cached = {
+            "source": "local",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "player": player,
+            "current_position": leaderboard_entry.get("position") if leaderboard_entry else None,
+            "current_score": leaderboard_entry.get("score_to_par") if leaderboard_entry else None,
+            "round_scores": scores
+        }
+    
+    return cached
+
+@api_router.get("/leaderboard/player/{player_id}/hole-scores")
+async def get_player_hole_scores(player_id: str, round_num: Optional[int] = Query(None, ge=1, le=4)):
+    """Get hole-by-hole scores for a player (per round or all)."""
+    cached_key = f"hole_scores_{player_id}_r{round_num or 'all'}"
+    cached = get_cached_data(cached_key)  # Extend caching if needed
+    
+    if cached is None and is_etx_configured():
+        params = {'round': round_num} if round_num else {}
+        etx_data = await fetch_from_etx(f"/inplay/holebyhole/{ETX_TOURNAMENT_ID}/{round_num or 1}", params)
+        if etx_data:
+            # Assume etx_data['holes'] = [{'hole':1, 'par':4, 'score':3, 'putts':2}, ...]
+            hole_scores = etx_data.get('holes', [])
+            cached = {'source': 'etx', 'updated_at': datetime.now(timezone.utc).isoformat(), 'hole_scores': hole_scores}
+            set_cached_data(cached_key, cached)
+    
+    if cached is None:
+        # Fallback: Assume db.player_hole_scores collection; implement if needed
+        query = {"player_id": player_id}
+        if round_num: query["round"] = round_num
+        hole_scores = await db.player_hole_scores.find(query, {"_id": 0}).to_list(18)
+        cached = {'source': 'local', 'updated_at': datetime.now(timezone.utc).isoformat(), 'hole_scores': hole_scores}
+    
+    return cached
+
+@api_router.get("/leaderboard/status")
+async def get_tournament_status():
+    """Get tournament status (current round, cut line, etc.)."""
+    if is_etx_configured():
+        etx_data = await fetch_from_etx(f"/event/status/{ETX_TOURNAMENT_ID}")
+        if etx_data:
+            # ETX returns a list, take the first item
+            status_data = etx_data[0] if isinstance(etx_data, list) else etx_data
+            return {
+                'current_round': status_data.get('CurrentRound', 1),
+                'cut_line': status_data.get('CutValue', 0),
+                'status': status_data.get('Status', 'In Progress'),
+                'round_status': status_data.get('RoundStatus', 'In Progress'),
+                'source': 'etx'
+            }
+    # Fallback
+    return {'current_round': 4, 'cut_line': '+2', 'status': 'Completed', 'source': 'local'}  # Mock; store in db
+
+@api_router.get("/leaderboard/kenyan-players")
+async def get_kenyan_players():
+    """
+    Get all Kenyan players in the tournament with their current standings.
+    Convenience endpoint for highlighting local players.
+    """
+    # Get live leaderboard first
+    leaderboard_response = await get_live_leaderboard(country="KEN")
+    
+    kenyan_entries = leaderboard_response.get("entries", [])
+    
+    # Get additional player details for each Kenyan player
+    detailed_players = []
+    for entry in kenyan_entries:
+        player_id = entry.get("player_id") or entry.get("etx_player_id")
+        if player_id:
+            try:
+                player_details = await get_player_details(player_id)
+                detailed_players.append({
+                    **entry,
+                    "details": player_details
+                })
+            except:
+                detailed_players.append(entry)
+        else:
+            detailed_players.append(entry)
+    
+    return {
+        "source": leaderboard_response.get("source", "local"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "tournament_id": ETX_TOURNAMENT_ID or "mko-2025",
+        "kenyan_player_count": len(detailed_players),
+        "players": detailed_players
+    }
+
+@api_router.get("/leaderboard/status")
+async def get_leaderboard_status():
+    """
+    Get the status of ETX API integration and data freshness.
+    """
+    etx_configured = is_etx_configured()
+    
+    # Check cache status
+    cache_status = {}
+    now = datetime.now(timezone.utc)
+    
+    for key in ['leaderboard', 'tee_times']:
+        entry = etx_cache.get(key, {})
+        if entry.get('expires'):
+            cache_status[key] = {
+                "cached": entry.get('data') is not None,
+                "expires_in_seconds": max(0, (entry['expires'] - now).total_seconds()) if entry.get('data') else 0
+            }
+        else:
+            cache_status[key] = {"cached": False, "expires_in_seconds": 0}
+    
+    cache_status["players_cached"] = len(etx_cache.get('players', {}))
+    
+    return {
+        "etx_configured": etx_configured,
+        "etx_base_url": ETX_BASE_URL if etx_configured else None,
+        "tournament_id": ETX_TOURNAMENT_ID if etx_configured else None,
+        "cache_ttl_seconds": ETX_CACHE_TTL,
+        "cache_status": cache_status,
+        "fallback_available": True,
+        "timestamp": now.isoformat()
+    }
+
+# ===================== ETX DATA TRANSFORMERS =====================
+def transform_etx_leaderboard(etx_data: dict) -> dict:
+    """Transform ETX leaderboard response to our format"""
+    entries = []
+    
+    # Handle various ETX response formats - ETX uses "Players" (capital P)
+    raw_entries = etx_data.get("Players", etx_data.get("leaderboard", etx_data.get("entries", etx_data.get("players", []))))
+    
+    for idx, item in enumerate(raw_entries):
+        # Build player name from FirstName + LastName
+        first_name = item.get("FirstName", "")
+        last_name = item.get("LastName", "")
+        player_name = f"{first_name} {last_name}".strip()
+        if not player_name:
+            player_name = item.get("PlayerName", item.get("name", "Unknown"))
+        
+        # Extract round scores
+        rounds = item.get("Rounds", [])
+        round_scores = {f"r{r.get('RoundNo', i+1)}": r.get("ScoreToPar", 0) for i, r in enumerate(rounds)}
+        round_strokes = {f"r{r.get('RoundNo', i+1)}_strokes": r.get("Strokes", 0) for i, r in enumerate(rounds)}
+        
+        # Get today's score (current round)
+        current_round_num = item.get("RoundsPlayed", 1)
+        today_score = None
+        for r in rounds:
+            if r.get("RoundNo") == current_round_num:
+                today_score = r.get("ScoreToPar", 0)
+                break
+        
+        entry = {
+            "position": item.get("Position", item.get("pos", idx + 1)),
+            "position_moved": item.get("PositionMoved", 0),
+            "player_id": item.get("PlayerId", item.get("player_id", str(uuid.uuid4()))),
+            "etx_player_id": item.get("PlayerId", item.get("id")),
+            "player_name": player_name,
+            "country": item.get("Country", item.get("nationality", "")),
+            "country_code": item.get("CountryCode", item.get("country_code", item.get("nat", ""))),
+            "score_to_par": item.get("ScoreToPar", item.get("total", item.get("score", 0))),
+            "today": today_score if today_score is not None else item.get("today", 0),
+            "thru": item.get("HolesPlayed", item.get("thru", item.get("holesPlayed", item.get("hole", "F")))),
+            "current_round": current_round_num,
+            "total_strokes": item.get("Strokes", item.get("totalStrokes", item.get("strokes", 0))),
+            "photo_url": item.get("imageUrl", item.get("photo", item.get("headshot", ""))),
+            "is_kenyan": item.get("CountryCode", item.get("country_code", "")).upper() == "KEN",
+            "rounds_played": item.get("RoundsPlayed", 0),
+            **round_scores,  # r1, r2, r3, r4
+            **round_strokes  # r1_strokes, r2_strokes, etc.
+        }
+        entries.append(entry)
+    
+    return {
+        "source": "etx",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "tournament_name": etx_data.get("Name", etx_data.get("tournamentName", etx_data.get("TournamentName", "Magical Kenya Open"))),
+        "round": etx_data.get("currentRound", etx_data.get("round", 1)),
+        "status": etx_data.get("status", "in_progress"),
+        "entries": entries
+    }
+
+def transform_etx_tee_times(etx_data: dict) -> dict:
+    """Transform ETX tee times response to our format"""
+    tee_times = []
+    
+    raw_times = etx_data.get("teeTimes", etx_data.get("tee_times", etx_data.get("groups", [])))
+    
+    for item in raw_times:
+        players = []
+        raw_players = item.get("players", item.get("group", []))
+        
+        for p in raw_players:
+            players.append({
+                "player_id": p.get("playerId", p.get("id")),
+                "player_name": p.get("playerName", p.get("name", "")),
+                "country_code": p.get("countryCode", p.get("country_code", "")),
+                "is_kenyan": p.get("countryCode", p.get("country_code", "")).upper() == "KEN"
+            })
+        
+        tee_times.append({
+            "tee_time": item.get("teeTime", item.get("time", "")),
+            "tee_number": item.get("tee", item.get("teeNumber", item.get("startingTee", 1))),
+            "group_number": item.get("groupNumber", item.get("group_id")),
+            "players": players
+        })
+    
+    return {
+        "source": "etx",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "round": etx_data.get("round", 1),
+        "date": etx_data.get("date", ""),
+        "tee_times": tee_times
+    }
+
+def transform_etx_player(etx_data: dict) -> dict:
+    """Transform ETX player response to our format"""
+    return {
+        "source": "etx",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "player": {
+            "player_id": etx_data.get("playerId", etx_data.get("id")),
+            "etx_id": etx_data.get("playerId", etx_data.get("id")),
+            "name": etx_data.get("playerName", etx_data.get("name", "")),
+            "first_name": etx_data.get("firstName", ""),
+            "last_name": etx_data.get("lastName", ""),
+            "country": etx_data.get("country", etx_data.get("nationality", "")),
+            "country_code": etx_data.get("countryCode", etx_data.get("country_code", "")),
+            "photo_url": etx_data.get("imageUrl", etx_data.get("headshot", "")),
+            "world_ranking": etx_data.get("owgr", etx_data.get("worldRanking")),
+            "age": etx_data.get("age"),
+            "turned_pro": etx_data.get("turnedPro"),
+            "is_kenyan": etx_data.get("countryCode", etx_data.get("country_code", "")).upper() == "KEN"
+        }
+    }
+
+def transform_etx_scores(etx_data: dict) -> list:
+    """Transform ETX scores response to our format"""
+    scores = []
+    
+    raw_scores = etx_data.get("rounds", etx_data.get("scores", []))
+    
+    for item in raw_scores:
+        scores.append({
+            "round": item.get("round", item.get("roundNumber")),
+            "score": item.get("score", item.get("grossScore")),
+            "score_to_par": item.get("scoreToPar", item.get("toPar")),
+            "holes_played": item.get("holesPlayed", 18),
+            "hole_scores": item.get("holeScores", item.get("holes", []))
+        })
+    
+    return scores
+
 @api_router.post("/admin/players")
 async def create_player(request: Request, player: Player):
     """Create player (admin only)"""
@@ -1023,19 +1590,31 @@ async def update_leaderboard_entry(request: Request, entry_id: str, entry: Leade
 
 # ===================== NEWS/CONTENT ROUTES =====================
 @api_router.get("/news")
-async def get_news(status: Optional[str] = "published", category: Optional[str] = None, limit: int = 20):
-    """Get news articles"""
-    query = {"status": status} if status else {}
+async def get_news(category: Optional[str] = None, limit: int = 20):
+    """Get published news articles"""
+    query = {"status": "published"}
     if category:
         query["category"] = category
     
-    articles = await db.news.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    articles = await db.news_articles.find(query, {"_id": 0}).sort("published_at", -1).to_list(limit)
     return articles
+
+@api_router.get("/sponsors")
+async def get_public_sponsors():
+    """Get active sponsors for public display"""
+    sponsors = await db.sponsors.find({"is_active": True}, {"_id": 0}).sort("tier", 1).to_list(50)
+    return sponsors
+
+@api_router.get("/board-members")
+async def get_public_board():
+    """Get active board members for public display"""
+    members = await db.board_members.find({"is_active": True}, {"_id": 0}).sort("order", 1).to_list(50)
+    return members
 
 @api_router.get("/news/{article_id}")
 async def get_article(article_id: str):
     """Get single article"""
-    article = await db.news.find_one({"article_id": article_id}, {"_id": 0})
+    article = await db.news_articles.find_one({"article_id": article_id}, {"_id": 0})
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
@@ -1061,7 +1640,7 @@ async def create_article(request: Request, article: NewsArticleCreate):
     
     article_dict = new_article.model_dump()
     article_dict["created_at"] = article_dict["created_at"].isoformat()
-    await db.news.insert_one(article_dict)
+    await db.news_articles.insert_one(article_dict)
     return article_dict
 
 @api_router.put("/admin/news/{article_id}")
@@ -1073,14 +1652,14 @@ async def update_article(request: Request, article_id: str, update: dict):
     if update.get("status") == "published" and not update.get("published_at"):
         update["published_at"] = datetime.now(timezone.utc).isoformat()
     
-    await db.news.update_one({"article_id": article_id}, {"$set": update})
+    await db.news_articles.update_one({"article_id": article_id}, {"$set": update})
     return {"message": "Article updated"}
 
 @api_router.delete("/admin/news/{article_id}")
 async def delete_article(request: Request, article_id: str):
     """Delete article (admin only)"""
     await require_admin(request)
-    await db.news.delete_one({"article_id": article_id})
+    await db.news_articles.delete_one({"article_id": article_id})
     return {"message": "Article deleted"}
 
 # ===================== GALLERY ROUTES =====================
@@ -1093,7 +1672,7 @@ async def get_gallery(content_type: Optional[str] = None, category: Optional[str
     if category:
         query["category"] = category
     
-    items = await db.gallery.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    items = await db.gallery.find(query, {"_id": 0}).sort("published_at", -1).to_list(limit)
     return items
 
 @api_router.post("/admin/gallery")
@@ -1222,13 +1801,14 @@ async def get_past_winners():
     winners = await db.past_winners.find({}, {"_id": 0}).sort("year", -1).to_list(100)
     if not winners:
         return [
-            {"year": 2025, "winner": "TBD", "country": "", "score": ""},
-            {"year": 2024, "winner": "Guido Migliozzi", "country": "Italy", "score": "-17"},
-            {"year": 2023, "winner": "Ewen Ferguson", "country": "Scotland", "score": "-21"},
-            {"year": 2022, "winner": "Justin Harding", "country": "South Africa", "score": "-16"},
-            {"year": 2021, "winner": "Justin Harding", "country": "South Africa", "score": "-21"},
-            {"year": 2020, "winner": "Cancelled", "country": "", "score": ""},
-            {"year": 2019, "winner": "Guido Migliozzi", "country": "Italy", "score": "-22"}
+            {"year": 2025, "winner": "Jacques Kruyswijk", "country": "South Africa", "score": "-17"},
+            {"year": 2024, "winner": "Darius van Driel", "country": "Netherlands", "score": "-10"},
+            {"year": 2023, "winner": "Jorge Campillo", "country": "Spain", "score": "-18"},
+            {"year": 2022, "winner": "Wu Ashun", "country": "China", "score": "-18"},
+            {"year": 2021, "winner": "Justin Harding", "country": "South Africa", "score": "-16"},
+            {"year": 2019, "winner": "Guido Migliozzi", "country": "Italy", "score": "-23"},
+            {"year": 2018, "winner": "Shubhankar Sharma", "country": "India", "score": "-23"},
+            {"year": 2017, "winner": "Francesco Molinari", "country": "Italy", "score": "-20"}
         ]
     return winners
 
@@ -1304,7 +1884,7 @@ class PolicyDocument(BaseModel):
     description: str
     filename: str
     file_url: str
-    category: str = "general"  # governance, compliance, conduct, other
+    category: str = "general" # governance, compliance, conduct, other
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
@@ -1402,132 +1982,22 @@ async def update_policy(request: Request, policy_id: str, update: dict):
     await db.policies.update_one({"policy_id": policy_id}, {"$set": update})
     return {"message": "Policy updated successfully"}
 
-# ===================== MARSHAL AUTH HELPERS =====================
-def hash_password(password: str) -> str:
-    """Hash password using bcrypt"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify password against hash"""
-    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
-
-async def get_marshal_session(request: Request) -> Optional[dict]:
-    """Get marshal session from cookie or header"""
-    session_token = request.cookies.get("marshal_session")
-    if not session_token:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            session_token = auth_header.split(" ")[1]
-    
-    if not session_token:
-        return None
-    
-    session = await db.marshal_sessions.find_one({"session_id": session_token}, {"_id": 0})
-    if not session:
-        return None
-    
-    # Check expiry
-    expires_at = session.get("expires_at")
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        await db.marshal_sessions.delete_one({"session_id": session_token})
-        return None
-    
-    return session
-
-async def require_marshal_auth(request: Request) -> dict:
-    """Require marshal authentication"""
-    session = await get_marshal_session(request)
-    if not session:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return session
-
-async def require_marshal_role(request: Request, allowed_roles: List[str]) -> dict:
-    """Require specific marshal roles"""
-    session = await require_marshal_auth(request)
-    if session["role"] not in allowed_roles:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-    return session
-
-# ===================== VOLUNTEER REGISTRATION APIs =====================
-@api_router.post("/volunteers/register")
-async def register_volunteer(volunteer: VolunteerRegistrationCreate):
-    """Public endpoint for volunteer registration"""
-    # Check if email already registered
-    existing = await db.volunteers.find_one({"email": volunteer.email}, {"_id": 0})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Check consent
-    if not volunteer.consent_given:
-        raise HTTPException(status_code=400, detail="Consent is required")
-    
-    # Check role quotas
-    if volunteer.role == "scorer":
-        scorer_count = await db.volunteers.count_documents({"role": "scorer", "status": {"$ne": "rejected"}})
-        if scorer_count >= 60:
-            raise HTTPException(status_code=400, detail="Scorer positions are full (max 60)")
-    
-    # Create volunteer record
-    vol_data = {
-        "volunteer_id": str(uuid.uuid4()),
-        "first_name": volunteer.first_name,
-        "last_name": volunteer.last_name,
-        "nationality": volunteer.nationality,
-        "identification_number": volunteer.identification_number,
-        "golf_club": volunteer.golf_club,
-        "email": volunteer.email,
-        "phone": volunteer.phone,
-        "role": volunteer.role,
-        "volunteered_before": volunteer.volunteered_before,
-        "availability_thursday": volunteer.availability_thursday,
-        "availability_friday": volunteer.availability_friday,
-        "availability_saturday": volunteer.availability_saturday,
-        "availability_sunday": volunteer.availability_sunday,
-        "photo_attached": volunteer.photo_attached,
-        "consent_given": volunteer.consent_given,
-        "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": None,
-        "assigned_location": None,
-        "assigned_supervisor": None,
-        "assigned_shifts": [],
-        "notes": None
-    }
-    
-    await db.volunteers.insert_one(vol_data)
-    
-    return {
-        "success": True,
-        "message": "Registration submitted successfully. You will be notified once reviewed.",
-        "volunteer_id": vol_data["volunteer_id"]
-    }
-
-@api_router.get("/volunteers/stats")
-async def get_volunteer_stats():
-    """Get volunteer registration statistics (public)"""
-    marshal_count = await db.volunteers.count_documents({"role": "marshal", "status": {"$ne": "rejected"}})
-    scorer_count = await db.volunteers.count_documents({"role": "scorer", "status": {"$ne": "rejected"}})
-    
-    return {
-        "marshals": {"current": marshal_count, "minimum": 150},
-        "scorers": {"current": scorer_count, "maximum": 60}
-    }
-
 # ===================== MARSHAL AUTH APIs =====================
 @api_router.post("/marshal/login")
 async def marshal_login(credentials: MarshalLogin, response: Response):
     """Marshal dashboard login"""
-    user = await db.marshal_users.find_one({"username": credentials.username}, {"_id": 0})
+    # Case-insensitive username lookup
+    username_lower = credentials.username.lower()
+    user = await db.marshal_users.find_one({"username": username_lower}, {"_id": 0})
     
-    if not user or not verify_password(credentials.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not user:
+        raise HTTPException(status_code=401, detail="Username not found")
+    
+    if not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect password")
     
     if not user.get("is_active", True):
-        raise HTTPException(status_code=401, detail="Account is disabled")
+        raise HTTPException(status_code=401, detail="Account is disabled. Contact administrator.")
     
     # Create session
     session_id = secrets.token_urlsafe(32)
@@ -1535,7 +2005,6 @@ async def marshal_login(credentials: MarshalLogin, response: Response):
         "session_id": session_id,
         "marshal_id": user["marshal_id"],
         "username": user["username"],
-        "full_name": user["full_name"],
         "role": user["role"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
@@ -1556,7 +2025,7 @@ async def marshal_login(credentials: MarshalLogin, response: Response):
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=8 * 60 * 60  # 8 hours
+        max_age=8 * 60 * 60 # 8 hours
     )
     
     return {
@@ -1580,6 +2049,77 @@ async def marshal_logout(request: Request, response: Response):
     response.delete_cookie("marshal_session")
     return {"success": True, "message": "Logged out successfully"}
 
+
+
+@api_router.post("/webmaster/login")
+async def webmaster_login(credentials: MarshalLogin, response: Response):
+    """Webmaster dashboard login"""
+    # Check both webmaster_users and marshal_users for webmaster role
+    username_lower = credentials.username.lower()
+    
+    # First try webmaster_users collection
+    user = await db.webmaster_users.find_one({"username": username_lower}, {"_id": 0})
+    
+    # If not found, try marshal_users with webmaster role
+    if not user:
+        user = await db.marshal_users.find_one({"username": username_lower, "role": {"$in": ["webmaster", "admin"]}}, {"_id": 0})
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Username not found")
+    
+    if not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account is disabled. Contact administrator.")
+    
+    # Create session (reuse marshal session structure)
+    session_id = secrets.token_urlsafe(32)
+    session_data = {
+        "session_id": session_id,
+        "marshal_id": user.get("marshal_id", user.get("user_id")),
+        "username": user["username"],
+        "role": user["role"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
+    }
+    
+    await db.webmaster_sessions.insert_one(session_data)
+    
+    # Update last login
+    if "marshal_id" in user:
+        await db.marshal_users.update_one(
+            {"marshal_id": user["marshal_id"]},
+            {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
+        )
+    else:
+        await db.webmaster_users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
+        )
+    
+    # Set cookie
+    response.set_cookie(
+        key="webmaster_session",
+        value=session_id,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=8 * 60 * 60 # 8 hours
+    )
+    
+    return {
+        "success": True,
+        "session_id": session_id,
+        "user": {
+            "user_id": user.get("marshal_id", user.get("user_id")),
+            "username": user["username"],
+            "full_name": user["full_name"],
+            "role": user["role"]
+        }
+    }
+
+
 @api_router.get("/marshal/me")
 async def get_marshal_profile(request: Request):
     """Get current marshal user profile"""
@@ -1587,10 +2127,15 @@ async def get_marshal_profile(request: Request):
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
+    # Get full user data from database
+    user = await db.marshal_users.find_one({"marshal_id": session["marshal_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
     return {
         "marshal_id": session["marshal_id"],
         "username": session["username"],
-        "full_name": session["full_name"],
+        "full_name": user.get("full_name", "Marshal User"),
         "role": session["role"]
     }
 
@@ -1641,7 +2186,7 @@ async def get_volunteer_details(request: Request, volunteer_id: str):
 @api_router.put("/marshal/volunteers/{volunteer_id}")
 async def update_volunteer(request: Request, volunteer_id: str, update: VolunteerUpdate):
     """Update volunteer record"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
     
     volunteer = await db.volunteers.find_one({"volunteer_id": volunteer_id}, {"_id": 0})
     if not volunteer:
@@ -1656,7 +2201,7 @@ async def update_volunteer(request: Request, volunteer_id: str, update: Voluntee
 @api_router.post("/marshal/volunteers/{volunteer_id}/approve")
 async def approve_volunteer(request: Request, volunteer_id: str):
     """Approve volunteer"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
     
     result = await db.volunteers.update_one(
         {"volunteer_id": volunteer_id},
@@ -1671,7 +2216,7 @@ async def approve_volunteer(request: Request, volunteer_id: str):
 @api_router.post("/marshal/volunteers/{volunteer_id}/reject")
 async def reject_volunteer(request: Request, volunteer_id: str):
     """Reject volunteer"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
     
     result = await db.volunteers.update_one(
         {"volunteer_id": volunteer_id},
@@ -1683,15 +2228,52 @@ async def reject_volunteer(request: Request, volunteer_id: str):
     
     return {"success": True, "message": "Volunteer rejected"}
 
+@api_router.delete("/marshal/volunteers/{volunteer_id}")
+async def delete_volunteer(request: Request, volunteer_id: str):
+    """Delete volunteer record permanently (admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
+    
+    # First check if volunteer exists
+    volunteer = await db.volunteers.find_one({"volunteer_id": volunteer_id}, {"_id": 0})
+    if not volunteer:
+        raise HTTPException(status_code=404, detail="Volunteer not found")
+    
+    # Delete the volunteer
+    result = await db.volunteers.delete_one({"volunteer_id": volunteer_id})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Failed to delete volunteer")
+    
+    # Also delete any related attendance records
+    await db.attendance.delete_many({"volunteer_id": volunteer_id})
+    
+    # Log the deletion for audit
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "user_id": session.get("marshal_id"),
+        "username": session.get("username"),
+        "action": "DELETE",
+        "entity_type": "volunteer",
+        "entity_id": volunteer_id,
+        "old_value": {
+            "name": f"{volunteer.get('first_name', '')} {volunteer.get('last_name', '')}",
+            "email": volunteer.get("email"),
+            "role": volunteer.get("role")
+        },
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"success": True, "message": f"Volunteer {volunteer.get('first_name', '')} {volunteer.get('last_name', '')} deleted permanently"}
+
 # ===================== ATTENDANCE APIs =====================
 @api_router.post("/marshal/attendance")
 async def mark_attendance(request: Request, attendance: dict):
     """Mark volunteer attendance"""
-    session = await require_marshal_role(request, ["chief_marshal", "area_supervisor", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "area_supervisor", "admin"])
     
     volunteer_id = attendance.get("volunteer_id")
-    date = attendance.get("date")  # YYYY-MM-DD
-    status = attendance.get("status")  # present, absent, late
+    date = attendance.get("date") # YYYY-MM-DD
+    status = attendance.get("status") # present, absent, late
     
     if not all([volunteer_id, date, status]):
         raise HTTPException(status_code=400, detail="Missing required fields")
@@ -1754,16 +2336,17 @@ async def get_attendance_by_date(request: Request, date: str):
 @api_router.post("/marshal/users")
 async def create_marshal_user(request: Request, user: MarshalUserCreate):
     """Create marshal user (chief marshal only)"""
-    session = await require_marshal_role(request, ["chief_marshal"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio"])
     
-    # Check if username exists
-    existing = await db.marshal_users.find_one({"username": user.username}, {"_id": 0})
+    # Case-insensitive username check
+    username_lower = user.username.lower()
+    existing = await db.marshal_users.find_one({"username": username_lower}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
     
     user_data = {
         "marshal_id": str(uuid.uuid4()),
-        "username": user.username,
+        "username": username_lower, # Store lowercase
         "password_hash": hash_password(user.password),
         "full_name": user.full_name,
         "role": user.role,
@@ -1783,7 +2366,7 @@ async def create_marshal_user(request: Request, user: MarshalUserCreate):
 @api_router.get("/marshal/users")
 async def list_marshal_users(request: Request):
     """List all marshal users (chief marshal only)"""
-    await require_marshal_role(request, ["chief_marshal"])
+    await require_marshal_role(request, ["chief_marshal", "cio"])
     
     users = await db.marshal_users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
     return users
@@ -1791,7 +2374,7 @@ async def list_marshal_users(request: Request):
 @api_router.delete("/marshal/users/{marshal_id}")
 async def delete_marshal_user(request: Request, marshal_id: str):
     """Delete marshal user (chief marshal only)"""
-    session = await require_marshal_role(request, ["chief_marshal"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio"])
     
     # Can't delete yourself
     if marshal_id == session["marshal_id"]:
@@ -1805,7 +2388,7 @@ async def delete_marshal_user(request: Request, marshal_id: str):
 @api_router.put("/marshal/users/{marshal_id}")
 async def update_marshal_user(request: Request, marshal_id: str, update: MarshalUserUpdate):
     """Update marshal user (chief marshal only)"""
-    session = await require_marshal_role(request, ["chief_marshal"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio"])
     
     user = await db.marshal_users.find_one({"marshal_id": marshal_id}, {"_id": 0})
     if not user:
@@ -1836,6 +2419,7 @@ async def get_available_roles(request: Request):
     return {
         "roles": [
             {"value": "chief_marshal", "label": "Chief Marshal", "description": "Full system access"},
+            {"value": "cio", "label": "CIO", "description": "Chief Information Officer - Full admin access"},
             {"value": "tournament_director", "label": "Tournament Director", "description": "Tournament operations management"},
             {"value": "operations_manager", "label": "Operations Manager", "description": "Volunteer and logistics management"},
             {"value": "area_supervisor", "label": "Area Supervisor", "description": "Supervise specific areas/holes"},
@@ -1849,7 +2433,7 @@ async def get_available_roles(request: Request):
 @api_router.post("/marshal/forms")
 async def create_registration_form(request: Request, form_data: dict):
     """Create a new registration form (chief marshal/admin only)"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "tournament_director"])
     
     # Generate slug from name
     slug = form_data.get("name", "form").lower().replace(" ", "-").replace("_", "-")
@@ -1897,7 +2481,7 @@ async def get_registration_form(request: Request, form_id: str):
 @api_router.put("/marshal/forms/{form_id}")
 async def update_registration_form(request: Request, form_id: str, form_data: dict):
     """Update a registration form"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "tournament_director"])
     
     form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
     if not form:
@@ -1922,7 +2506,7 @@ async def update_registration_form(request: Request, form_id: str, form_data: di
 @api_router.delete("/marshal/forms/{form_id}")
 async def delete_registration_form(request: Request, form_id: str):
     """Delete a registration form"""
-    session = await require_marshal_role(request, ["chief_marshal"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio"])
     
     await db.registration_forms.delete_one({"form_id": form_id})
     return {"success": True, "message": "Form deleted"}
@@ -1930,7 +2514,7 @@ async def delete_registration_form(request: Request, form_id: str):
 @api_router.post("/marshal/forms/{form_id}/fields")
 async def add_form_field(request: Request, form_id: str, field_data: dict):
     """Add a field to a form"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "tournament_director"])
     
     form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
     if not form:
@@ -1962,7 +2546,7 @@ async def add_form_field(request: Request, form_id: str, field_data: dict):
 @api_router.put("/marshal/forms/{form_id}/fields/{field_id}")
 async def update_form_field(request: Request, form_id: str, field_id: str, field_data: dict):
     """Update a specific field in a form"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "tournament_director"])
     
     form = await db.registration_forms.find_one({"form_id": form_id}, {"_id": 0})
     if not form:
@@ -1994,7 +2578,7 @@ async def update_form_field(request: Request, form_id: str, field_id: str, field
 @api_router.delete("/marshal/forms/{form_id}/fields/{field_id}")
 async def delete_form_field(request: Request, form_id: str, field_id: str):
     """Delete a field from a form"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
     
     await db.registration_forms.update_one(
         {"form_id": form_id},
@@ -2039,7 +2623,6 @@ async def submit_form(slug: str, submission_data: dict):
         "submission_id": str(uuid.uuid4()),
         "form_id": form["form_id"],
         "form_slug": slug,
-        "form_name": form["name"],
         "data": submission_data,
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2066,7 +2649,7 @@ async def get_form_submissions(request: Request, form_id: Optional[str] = None, 
 @api_router.put("/marshal/submissions/{submission_id}")
 async def update_submission_status(request: Request, submission_id: str, update_data: dict):
     """Update submission status"""
-    session = await require_marshal_role(request, ["chief_marshal", "admin", "tournament_director", "operations_manager"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "tournament_director", "operations_manager"])
     
     status = update_data.get("status")
     if status not in ["pending", "approved", "rejected"]:
@@ -2082,23 +2665,116 @@ async def update_submission_status(request: Request, submission_id: str, update_
 # ===================== EXPORT APIs =====================
 @api_router.get("/marshal/export/volunteers")
 async def export_volunteers(request: Request, format: str = "csv"):
-    """Export volunteer list to CSV"""
+    """Export volunteer list as a clean report"""
     await require_marshal_auth(request)
     
-    volunteers = await db.volunteers.find({}, {"_id": 0}).to_list(1000)
+    volunteers = await db.volunteers.find({}, {"_id": 0}).sort([("status", 1), ("role", 1), ("last_name", 1)]).to_list(5000)
     
     if format == "csv":
         output = io.StringIO()
-        if volunteers:
-            writer = csv.DictWriter(output, fieldnames=volunteers[0].keys())
-            writer.writeheader()
-            writer.writerows(volunteers)
+        
+        # Define clean column headers for the report
+        fieldnames = [
+            "No.",
+            "First Name",
+            "Last Name",
+            "Role",
+            "Status",
+            "Phone Number",
+            "Email Address",
+            "Nationality",
+            "ID/Passport",
+            "Golf Club",
+            "Previous Volunteer",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+            "Assigned Location",
+            "Registration Date"
+        ]
+        
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        
+        for idx, vol in enumerate(volunteers, 1):
+            # Format phone number to show full number
+            phone = vol.get("phone", "")
+            if phone and not phone.startswith("+"):
+                phone = f"+{phone}"
+           
+            # Format availability
+            def format_availability(val):
+                if val == "all_day":
+                    return "All Day"
+                elif val == "morning":
+                    return "Morning"
+                elif val == "afternoon":
+                    return "Afternoon"
+                elif val == "not_available":
+                    return "Not Available"
+                return val or "-"
+           
+            # Format date
+            created = vol.get("created_at", "")
+            if created:
+                try:
+                    if isinstance(created, str):
+                        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    else:
+                        dt = created
+                    created = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    pass
+           
+            row = {
+                "No.": idx,
+                "First Name": vol.get("first_name", ""),
+                "Last Name": vol.get("last_name", ""),
+                "Role": vol.get("role", "").title(),
+                "Status": vol.get("status", "").title(),
+                "Phone Number": phone,
+                "Email Address": vol.get("email", ""),
+                "Nationality": vol.get("nationality", ""),
+                "ID/Passport": vol.get("identification_number", ""),
+                "Golf Club": vol.get("golf_club", ""),
+                "Previous Volunteer": "Yes" if vol.get("volunteered_before") else "No",
+                "Thursday": format_availability(vol.get("availability_thursday")),
+                "Friday": format_availability(vol.get("availability_friday")),
+                "Saturday": format_availability(vol.get("availability_saturday")),
+                "Sunday": format_availability(vol.get("availability_sunday")),
+                "Assigned Location": vol.get("assigned_location", "-"),
+                "Registration Date": created
+            }
+            writer.writerow(row)
+        
+        # Add summary at the end
+        output.write("\n")
+        output.write("SUMMARY\n")
+        output.write(f"Total Volunteers:,{len(volunteers)}\n")
+        
+        approved = len([v for v in volunteers if v.get("status") == "approved"])
+        pending = len([v for v in volunteers if v.get("status") == "pending"])
+        rejected = len([v for v in volunteers if v.get("status") == "rejected"])
+        marshals = len([v for v in volunteers if v.get("role") == "marshal"])
+        scorers = len([v for v in volunteers if v.get("role") == "scorer"])
+        
+        output.write(f"Approved:,{approved}\n")
+        output.write(f"Pending:,{pending}\n")
+        output.write(f"Rejected:,{rejected}\n")
+        output.write(f"Marshals:,{marshals}\n")
+        output.write(f"Scorers:,{scorers}\n")
+        output.write(f"\nGenerated:,{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
         
         output.seek(0)
+        
+        # Generate filename with date
+        filename = f"MKO_Volunteers_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=volunteers.csv"}
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     
     return volunteers
@@ -2146,223 +2822,522 @@ async def get_marshal_dashboard_stats(request: Request):
             "scorers": scorers
         },
         "quotas": {
-            "marshals_minimum": 150,
-            "scorers_maximum": 60
+            "marshals_target": 300,
+            "scorers_target": 300
         }
     }
 
-# ===================== SEED DEFAULT CHIEF MARSHAL =====================
-async def seed_chief_marshal():
-    """Create default chief marshal account if none exists"""
-    existing = await db.marshal_users.find_one({"role": "chief_marshal"}, {"_id": 0})
-    if not existing:
-        default_user = {
-            "marshal_id": str(uuid.uuid4()),
-            "username": "chiefmarshal",
-            "password_hash": hash_password("MKO2026Admin!"),
-            "full_name": "Chief Marshal",
-            "role": "chief_marshal",
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "last_login": None
-        }
-        await db.marshal_users.insert_one(default_user)
-        logger.info("Default chief marshal account created: username='chiefmarshal', password='MKO2026Admin!'")
+# ===================== ADVANCED VOLUNTEER QUERY ENGINE =====================
+# Karen membership normalization - match variations
+KAREN_CLUB_VARIATIONS = [
+    "karen", "karen country club", "karen golf club", "karen cc",
+    "kcc", "karen c.c", "karen c.c.", "karen golf", "kgc"
+]
+def normalize_club_name(club_name: str) -> str:
+    """Normalize club name for matching"""
+    if not club_name:
+        return ""
+    return club_name.lower().strip()
 
-async def seed_default_volunteer_form():
-    """Create default volunteer registration form if none exists"""
-    existing = await db.registration_forms.find_one({"slug": "volunteer-registration"}, {"_id": 0})
-    if not existing:
-        default_form = {
-            "form_id": str(uuid.uuid4()),
-            "name": "Volunteer Registration",
-            "slug": "volunteer-registration",
-            "description": "Register as a volunteer marshal or scorer for the Magical Kenya Open 2026",
-            "fields": [
-                {"field_id": str(uuid.uuid4()), "name": "first_name", "label": "First Name", "field_type": "text", "required": True, "is_active": True, "order": 0},
-                {"field_id": str(uuid.uuid4()), "name": "last_name", "label": "Last Name", "field_type": "text", "required": True, "is_active": True, "order": 1},
-                {"field_id": str(uuid.uuid4()), "name": "nationality", "label": "Nationality", "field_type": "text", "required": True, "is_active": True, "order": 2},
-                {"field_id": str(uuid.uuid4()), "name": "identification_number", "label": "ID/Passport Number", "field_type": "text", "required": True, "is_active": True, "order": 3},
-                {"field_id": str(uuid.uuid4()), "name": "golf_club", "label": "Golf Club", "field_type": "text", "required": True, "is_active": True, "order": 4},
-                {"field_id": str(uuid.uuid4()), "name": "email", "label": "Email Address", "field_type": "email", "required": True, "is_active": True, "order": 5},
-                {"field_id": str(uuid.uuid4()), "name": "phone", "label": "Phone Number", "field_type": "phone", "required": True, "is_active": True, "order": 6},
-                {"field_id": str(uuid.uuid4()), "name": "role", "label": "Volunteer Role", "field_type": "select", "required": True, "is_active": True, "options": ["marshal", "scorer"], "order": 7},
-                {"field_id": str(uuid.uuid4()), "name": "volunteered_before", "label": "Have you volunteered at MKO before?", "field_type": "checkbox", "required": False, "is_active": True, "order": 8},
-                {"field_id": str(uuid.uuid4()), "name": "availability_thursday", "label": "Thursday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 9},
-                {"field_id": str(uuid.uuid4()), "name": "availability_friday", "label": "Friday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 10},
-                {"field_id": str(uuid.uuid4()), "name": "availability_saturday", "label": "Saturday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 11},
-                {"field_id": str(uuid.uuid4()), "name": "availability_sunday", "label": "Sunday Availability", "field_type": "select", "required": True, "is_active": True, "options": ["all_day", "morning", "afternoon", "not_available"], "order": 12},
-            ],
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": None,
-            "created_by": None
-        }
-        await db.registration_forms.insert_one(default_form)
-        logger.info("Default volunteer registration form created")
+def is_karen_member(club_name: str) -> bool:
+    """Check if club name matches Karen Country Club variations"""
+    normalized = normalize_club_name(club_name)
+    for variation in KAREN_CLUB_VARIATIONS:
+        if variation in normalized or normalized in variation:
+            return True
+    return False
 
-async def seed_default_tournament():
-    """Create default MKO 2026 tournament if none exists"""
-    existing = await db.tournaments.find_one({"code": "MKO2026"}, {"_id": 0})
-    if not existing:
-        tournament = {
-            "tournament_id": str(uuid.uuid4()),
-            "name": "Magical Kenya Open 2026",
-            "code": "MKO2026",
-            "year": 2026,
-            "start_date": "2026-02-19",
-            "end_date": "2026-02-22",
-            "venue": "Karen Country Club",
-            "is_active": True,
-            "is_current": True,
-            "settings": {
-                "volunteer_quota_marshals": 150,
-                "volunteer_quota_scorers": 60
-            },
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.tournaments.insert_one(tournament)
-        logger.info("Default MKO 2026 tournament created")
-        return tournament["tournament_id"]
-    return existing["tournament_id"]
+class VolunteerQueryFilters(BaseModel):
+    """Advanced query filters for volunteers"""
+    role: Optional[str] = None # marshal, scorer
+    status: Optional[str] = None # pending, approved, rejected
+    days: Optional[List[str]] = None # ["thursday", "friday", "saturday", "sunday"]
+    time_slots: Optional[List[str]] = None # ["morning", "afternoon", "all_day"]
+    karen_member: Optional[bool] = None # True = Karen members only
+    nationality: Optional[str] = None # "kenyan", "non_kenyan"
+    volunteered_before: Optional[bool] = None # Previous experience
+    search: Optional[str] = None # Name/email/phone search
+    assigned_location: Optional[str] = None # Filter by assigned location
+    unassigned_only: Optional[bool] = None # Only show unassigned volunteers
 
-async def seed_accreditation_modules(tournament_id: str):
-    """Seed default accreditation modules for a tournament"""
-    modules = [
-        {"module_type": "volunteers", "name": "Volunteer Registration", "slug": "volunteers", "description": "Register as a tournament volunteer marshal or scorer"},
-        {"module_type": "vendors", "name": "Vendor Accreditation", "slug": "vendors", "description": "Apply for vendor/supplier accreditation"},
-        {"module_type": "media", "name": "Media Accreditation", "slug": "media", "description": "Apply for media/press accreditation"},
-        {"module_type": "pro_am", "name": "Pro-Am Registration", "slug": "pro-am", "description": "Register for the Pro-Am tournament"},
-        {"module_type": "procurement", "name": "Procurement & Tenders", "slug": "procurement", "description": "Submit tender and procurement applications"},
-        {"module_type": "jobs", "name": "Job Applications", "slug": "jobs", "description": "Apply for tournament job positions"},
-    ]
+class VolunteerQueryResponse(BaseModel):
+    """Response for volunteer query"""
+    volunteers: List[dict]
+    total: int
+    filters_applied: dict
+    statistics: dict
+
+@api_router.post("/marshal/volunteers/query")
+async def query_volunteers(request: Request, filters: VolunteerQueryFilters):
+    """
+    Advanced volunteer query with combinable filters.
+    Supports day, time, Karen membership, nationality, and experience filtering.
+    """
+    await require_marshal_auth(request)
     
-    for mod in modules:
-        existing = await db.accreditation_modules.find_one({
-            "tournament_id": tournament_id, 
-            "module_type": mod["module_type"]
-        }, {"_id": 0})
-        if not existing:
-            module_data = {
-                "module_id": str(uuid.uuid4()),
-                "tournament_id": tournament_id,
-                "module_type": mod["module_type"],
-                "name": mod["name"],
-                "slug": mod["slug"],
-                "description": mod["description"],
-                "form_id": None,
-                "is_active": mod["module_type"] == "volunteers",  # Only volunteers active by default
-                "is_public": True,
-                "settings": {},
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.accreditation_modules.insert_one(module_data)
-    logger.info("Default accreditation modules created")
-
-async def seed_default_locations(tournament_id: str):
-    """Seed default locations for a tournament"""
-    locations = [
-        {"name": "Karen Country Club", "code": "KCC", "location_type": "venue"},
-        {"name": "Media Center", "code": "MC", "location_type": "facility"},
-        {"name": "Hospitality Village", "code": "HV", "location_type": "facility"},
-        {"name": "Players Lounge", "code": "PL", "location_type": "facility"},
-        {"name": "Administration Office", "code": "AO", "location_type": "facility"},
-    ]
+    # Build MongoDB query
+    query = {}
+    filters_applied = {}
     
-    for loc in locations:
-        existing = await db.locations.find_one({
-            "tournament_id": tournament_id,
-            "code": loc["code"]
-        }, {"_id": 0})
-        if not existing:
-            loc_data = {
-                "location_id": str(uuid.uuid4()),
-                "tournament_id": tournament_id,
-                "name": loc["name"],
-                "code": loc["code"],
-                "location_type": loc["location_type"],
-                "parent_location_id": None,
-                "capacity": None,
-                "description": None,
-                "coordinates": None,
-                "is_active": True,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.locations.insert_one(loc_data)
-    logger.info("Default locations created")
-
-async def seed_default_access_levels(tournament_id: str):
-    """Seed default access levels for a tournament"""
-    levels = [
-        {"name": "All Access", "code": "AA", "tier": 1, "color": "#FFD700", "description": "Full tournament access"},
-        {"name": "VIP", "code": "VIP", "tier": 2, "color": "#800080", "description": "VIP areas and hospitality"},
-        {"name": "Media", "code": "MED", "tier": 3, "color": "#0000FF", "description": "Media center and press areas"},
-        {"name": "Player Support", "code": "PS", "tier": 4, "color": "#008000", "description": "Player areas and lounge"},
-        {"name": "Operations", "code": "OPS", "tier": 5, "color": "#FFA500", "description": "Operational areas"},
-        {"name": "Vendor", "code": "VEN", "tier": 6, "color": "#A52A2A", "description": "Vendor and service areas"},
-        {"name": "General", "code": "GEN", "tier": 10, "color": "#808080", "description": "General public areas"},
-    ]
+    # Role filter (marshal/scorer)
+    if filters.role:
+        query["role"] = filters.role
+        filters_applied["role"] = filters.role
     
-    for level in levels:
-        existing = await db.access_levels.find_one({
-            "tournament_id": tournament_id,
-            "code": level["code"]
-        }, {"_id": 0})
-        if not existing:
-            level_data = {
-                "access_level_id": str(uuid.uuid4()),
-                "tournament_id": tournament_id,
-                "name": level["name"],
-                "code": level["code"],
-                "tier": level["tier"],
-                "color": level["color"],
-                "description": level["description"],
-                "allowed_zone_ids": [],
-                "allowed_module_types": [],
-                "is_active": True,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.access_levels.insert_one(level_data)
-    logger.info("Default access levels created")
+    # Status filter
+    if filters.status:
+        query["status"] = filters.status
+        filters_applied["status"] = filters.status
+    
+    # Day availability filter - combinable multi-select
+    if filters.days:
+        day_conditions = []
+        for day in filters.days:
+            day_key = f"availability_{day.lower()}"
+            # Include volunteers available for that day (morning, afternoon, or all_day)
+            day_conditions.append({day_key: {"$ne": "not_available"}})
+       
+        if day_conditions:
+            if "$and" not in query:
+                query["$and"] = []
+            # Use $or to find volunteers available on ANY of the selected days
+            query["$and"].append({"$or": day_conditions})
+            filters_applied["days"] = filters.days
+    
+    # Time slot filter - drill-down within days
+    if filters.time_slots and filters.days:
+        time_conditions = []
+        for day in filters.days:
+            day_key = f"availability_{day.lower()}"
+            for slot in filters.time_slots:
+                if slot == "all_day":
+                    time_conditions.append({day_key: "all_day"})
+                elif slot == "morning":
+                    time_conditions.append({day_key: {"$in": ["morning", "all_day"]}})
+                elif slot == "afternoon":
+                    time_conditions.append({day_key: {"$in": ["afternoon", "all_day"]}})
+       
+        if time_conditions:
+            if "$and" not in query:
+                query["$and"] = []
+            query["$and"].append({"$or": time_conditions})
+            filters_applied["time_slots"] = filters.time_slots
+    
+    # Karen membership filter (normalized matching)
+    if filters.karen_member is not None:
+        filters_applied["karen_member"] = filters.karen_member
+        # This will be applied in post-processing due to normalization needs
+    
+    # Nationality filter
+    if filters.nationality:
+        if filters.nationality.lower() == "kenyan":
+            query["nationality"] = {"$regex": "kenya", "$options": "i"}
+        elif filters.nationality.lower() == "non_kenyan":
+            query["nationality"] = {"$not": {"$regex": "kenya", "$options": "i"}}
+        filters_applied["nationality"] = filters.nationality
+    
+    # Previous volunteering experience
+    if filters.volunteered_before is not None:
+        query["volunteered_before"] = filters.volunteered_before
+        filters_applied["volunteered_before"] = filters.volunteered_before
+    
+    # Text search
+    if filters.search:
+        search_term = filters.search
+        query["$or"] = [
+            {"first_name": {"$regex": search_term, "$options": "i"}},
+            {"last_name": {"$regex": search_term, "$options": "i"}},
+            {"email": {"$regex": search_term, "$options": "i"}},
+            {"phone": {"$regex": search_term, "$options": "i"}},
+            {"golf_club": {"$regex": search_term, "$options": "i"}}
+        ]
+        filters_applied["search"] = filters.search
+    
+    # Assigned location filter
+    if filters.assigned_location:
+        query["assigned_location"] = filters.assigned_location
+        filters_applied["assigned_location"] = filters.assigned_location
+    
+    # Unassigned only filter
+    if filters.unassigned_only:
+        query["$or"] = [
+            {"assigned_location": None},
+            {"assigned_location": ""},
+            {"assigned_location": {"$exists": False}}
+        ]
+        filters_applied["unassigned_only"] = True
+    
+    # Execute query
+    volunteers = await db.volunteers.find(query, {"_id": 0}).sort([
+        ("status", 1), # approved first
+        ("last_name", 1),
+        ("first_name", 1)
+    ]).to_list(5000)
+    
+    # Apply Karen membership filter in post-processing (for normalized matching)
+    if filters.karen_member is not None:
+        if filters.karen_member:
+            volunteers = [v for v in volunteers if is_karen_member(v.get("golf_club", ""))]
+        else:
+            volunteers = [v for v in volunteers if not is_karen_member(v.get("golf_club", ""))]
+    
+    # Calculate statistics for the result set
+    stats = {
+        "total": len(volunteers),
+        "by_status": {
+            "pending": len([v for v in volunteers if v.get("status") == "pending"]),
+            "approved": len([v for v in volunteers if v.get("status") == "approved"]),
+            "rejected": len([v for v in volunteers if v.get("status") == "rejected"])
+        },
+        "by_role": {
+            "marshals": len([v for v in volunteers if v.get("role") == "marshal"]),
+            "scorers": len([v for v in volunteers if v.get("role") == "scorer"])
+        },
+        "karen_members": len([v for v in volunteers if is_karen_member(v.get("golf_club", ""))]),
+        "first_timers": len([v for v in volunteers if not v.get("volunteered_before")]),
+        "experienced": len([v for v in volunteers if v.get("volunteered_before")]),
+        "assigned": len([v for v in volunteers if v.get("assigned_location")]),
+        "unassigned": len([v for v in volunteers if not v.get("assigned_location")])
+    }
+    
+    return {
+        "volunteers": volunteers,
+        "total": len(volunteers),
+        "filters_applied": filters_applied,
+        "statistics": stats
+    }
 
-@app.on_event("startup")
-async def startup_event():
-    """Run on app startup"""
-    await seed_chief_marshal()
-    await seed_default_volunteer_form()
-    tournament_id = await seed_default_tournament()
-    await seed_accreditation_modules(tournament_id)
-    await seed_default_locations(tournament_id)
-    await seed_default_access_levels(tournament_id)
-
-# ===================== AUDIT LOGGING HELPER =====================
-async def log_audit(
-    request: Request,
-    user_id: str,
-    username: str,
-    action: str,
-    entity_type: str,
-    entity_id: Optional[str] = None,
-    old_value: Optional[Dict] = None,
-    new_value: Optional[Dict] = None,
-    tournament_id: Optional[str] = None
-):
-    """Log an audit trail entry"""
-    log_entry = {
+@api_router.post("/marshal/volunteers/bulk-assign")
+async def bulk_assign_volunteers(request: Request, assignment: dict):
+    """
+    Bulk assign volunteers to roles, locations, shifts, and supervisors.
+    """
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "operations_manager"])
+    
+    volunteer_ids = assignment.get("volunteer_ids", [])
+    location = assignment.get("location")
+    supervisor = assignment.get("supervisor")
+    shifts = assignment.get("shifts", [])
+    day = assignment.get("day") # Optional: specific day assignment
+    notes = assignment.get("notes")
+    
+    if not volunteer_ids:
+        raise HTTPException(status_code=400, detail="No volunteers selected")
+    
+    update_data = {
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    if location:
+        update_data["assigned_location"] = location
+    if supervisor:
+        update_data["assigned_supervisor"] = supervisor
+    if shifts:
+        update_data["assigned_shifts"] = shifts
+    if notes:
+        update_data["notes"] = notes
+    
+    # Update all selected volunteers
+    result = await db.volunteers.update_many(
+        {"volunteer_id": {"$in": volunteer_ids}},
+        {"$set": update_data}
+    )
+    
+    # Log the bulk assignment
+    await db.audit_logs.insert_one({
         "log_id": str(uuid.uuid4()),
-        "tournament_id": tournament_id,
-        "user_id": user_id,
-        "username": username,
-        "action": action,
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "old_value": old_value,
-        "new_value": new_value,
-        "ip_address": request.client.host if request.client else None,
-        "user_agent": request.headers.get("user-agent"),
+        "user_id": session.get("marshal_id"),
+        "username": session.get("username"),
+        "action": "BULK_ASSIGN",
+        "entity_type": "volunteers",
+        "entity_id": None,
+        "new_value": {
+            "volunteer_count": len(volunteer_ids),
+            "location": location,
+            "supervisor": supervisor,
+            "shifts": shifts
+        },
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {
+        "success": True,
+        "message": f"Successfully assigned {result.modified_count} volunteers",
+        "assigned_count": result.modified_count
+    }
+
+@api_router.post("/marshal/volunteers/export-query")
+async def export_query_results(request: Request, filters: VolunteerQueryFilters, format: str = "csv"):
+    """
+    Export filtered volunteer results as CSV/Excel.
+    Uses the same filtering logic as the query endpoint.
+    """
+    await require_marshal_auth(request)
+    
+    # Reuse query logic
+    query_result = await query_volunteers(request, filters)
+    volunteers = query_result["volunteers"]
+    
+    if format == "csv":
+        output = io.StringIO()
+        
+        fieldnames = [
+            "No.",
+            "First Name",
+            "Last Name",
+            "Role",
+            "Status",
+            "Phone Number",
+            "Email Address",
+            "Nationality",
+            "ID/Passport",
+            "Golf Club",
+            "Karen Member",
+            "Previous Volunteer",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+            "Assigned Location",
+            "Assigned Supervisor",
+            "Registration Date"
+        ]
+        
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        
+        for idx, vol in enumerate(volunteers, 1):
+            phone = vol.get("phone", "")
+            if phone and not phone.startswith("+"):
+                phone = f"+{phone}"
+           
+            def format_availability(val):
+                if val == "all_day":
+                    return "All Day"
+                elif val == "morning":
+                    return "Morning"
+                elif val == "afternoon":
+                    return "Afternoon"
+                elif val == "not_available":
+                    return "-"
+                return val or "-"
+           
+            created = vol.get("created_at", "")
+            if created:
+                try:
+                    if isinstance(created, str):
+                        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    else:
+                        dt = created
+                    created = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    pass
+           
+            row = {
+                "No.": idx,
+                "First Name": vol.get("first_name", ""),
+                "Last Name": vol.get("last_name", ""),
+                "Role": vol.get("role", "").title(),
+                "Status": vol.get("status", "").title(),
+                "Phone Number": phone,
+                "Email Address": vol.get("email", ""),
+                "Nationality": vol.get("nationality", ""),
+                "ID/Passport": vol.get("identification_number", ""),
+                "Golf Club": vol.get("golf_club", ""),
+                "Karen Member": "Yes" if is_karen_member(vol.get("golf_club", "")) else "No",
+                "Previous Volunteer": "Yes" if vol.get("volunteered_before") else "No",
+                "Thursday": format_availability(vol.get("availability_thursday")),
+                "Friday": format_availability(vol.get("availability_friday")),
+                "Saturday": format_availability(vol.get("availability_saturday")),
+                "Sunday": format_availability(vol.get("availability_sunday")),
+                "Assigned Location": vol.get("assigned_location", "-"),
+                "Assigned Supervisor": vol.get("assigned_supervisor", "-"),
+                "Registration Date": created
+            }
+            writer.writerow(row)
+        
+        # Add summary
+        stats = query_result["statistics"]
+        output.write("\n")
+        output.write("QUERY RESULTS SUMMARY\n")
+        output.write(f"Total Results:,{stats['total']}\n")
+        output.write(f"Marshals:,{stats['by_role']['marshals']}\n")
+        output.write(f"Scorers:,{stats['by_role']['scorers']}\n")
+        output.write(f"Karen Members:,{stats['karen_members']}\n")
+        output.write(f"Experienced:,{stats['experienced']}\n")
+        output.write(f"First-timers:,{stats['first_timers']}\n")
+        output.write(f"Assigned:,{stats['assigned']}\n")
+        output.write(f"Unassigned:,{stats['unassigned']}\n")
+        output.write(f"\nFilters Applied:,{query_result['filters_applied']}\n")
+        output.write(f"\nGenerated:,{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+        
+        output.seek(0)
+        
+        filename = f"MKO_Volunteers_Query_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    
+    return volunteers
+
+@api_router.get("/marshal/assignment-locations")
+async def get_assignment_locations(request: Request):
+    """
+    Get unique locations currently used for volunteer assignments.
+    Plus predefined locations for the tournament.
+    """
+    await require_marshal_auth(request)
+    
+    # Get unique locations from existing assignments
+    pipeline = [
+        {"$match": {"assigned_location": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$assigned_location"}},
+        {"$sort": {"_id": 1}}
+    ]
+    
+    existing_locations = await db.volunteers.aggregate(pipeline).to_list(100)
+    existing = [loc["_id"] for loc in existing_locations if loc["_id"]]
+    
+    # Predefined golf course locations
+    predefined = [
+        "Hole 1", "Hole 2", "Hole 3", "Hole 4", "Hole 5",
+        "Hole 6", "Hole 7", "Hole 8", "Hole 9", "Hole 10",
+        "Hole 11", "Hole 12", "Hole 13", "Hole 14", "Hole 15",
+        "Hole 16", "Hole 17", "Hole 18",
+        "Clubhouse", "Driving Range", "Practice Green",
+        "Starter Area", "Scoring Tent", "Media Center",
+        "VIP Area", "Spectator Entrance", "Player Parking",
+        "Volunteer Check-in", "First Aid Station"
+    ]
+    
+    # Combine and deduplicate
+    all_locations = list(set(predefined + existing))
+    all_locations.sort()
+    
+    return {"locations": all_locations}
+
+@api_router.get("/marshal/assignment-supervisors")
+async def get_supervisors(request: Request):
+    """
+    Get list of area supervisors for assignment.
+    """
+    await require_marshal_auth(request)
+    
+    # Get supervisors from marshal_users
+    supervisors = await db.marshal_users.find(
+        {"role": {"$in": ["area_supervisor", "chief_marshal", "cio", "operations_manager", "admin"]}, "is_active": True},
+        {"_id": 0, "marshal_id": 1, "username": 1, "full_name": 1, "role": 1}
+    ).to_list(100)
+    
+    # Also get unique supervisors from existing assignments
+    pipeline = [
+        {"$match": {"assigned_supervisor": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$assigned_supervisor"}},
+        {"$sort": {"_id": 1}}
+    ]
+    
+    existing_supervisors = await db.volunteers.aggregate(pipeline).to_list(100)
+    existing = [{"full_name": s["_id"], "marshal_id": None} for s in existing_supervisors if s["_id"]]
+    
+    # Combine
+    all_supervisors = supervisors + existing
+    
+    return {"supervisors": all_supervisors}
+
+@api_router.get("/marshal/query-presets")
+async def get_query_presets(request: Request):
+    """
+    Get saved query presets for quick access.
+    """
+    await require_marshal_auth(request)
+    
+    presets = await db.volunteer_query_presets.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    
+    # Add default presets if none exist
+    if not presets:
+        default_presets = [
+            {
+                "preset_id": str(uuid.uuid4()),
+                "name": "All Scorers - Thursday AM",
+                "description": "Scorers available Thursday morning",
+                "filters": {"role": "scorer", "days": ["thursday"], "time_slots": ["morning", "all_day"], "status": "approved"}
+            },
+            {
+                "preset_id": str(uuid.uuid4()),
+                "name": "Karen Members Only",
+                "description": "Volunteers who are Karen Country Club members",
+                "filters": {"karen_member": True, "status": "approved"}
+            },
+            {
+                "preset_id": str(uuid.uuid4()),
+                "name": "Unassigned Approved Volunteers",
+                "description": "Approved volunteers pending assignment",
+                "filters": {"status": "approved", "unassigned_only": True}
+            },
+            {
+                "preset_id": str(uuid.uuid4()),
+                "name": "Experienced Marshals",
+                "description": "Marshals with previous volunteering experience",
+                "filters": {"role": "marshal", "volunteered_before": True, "status": "approved"}
+            },
+            {
+                "preset_id": str(uuid.uuid4()),
+                "name": "Weekend Coverage - Scorers",
+                "description": "Scorers available Saturday and Sunday",
+                "filters": {"role": "scorer", "days": ["saturday", "sunday"], "status": "approved"}
+            }
+        ]
+        # Insert default presets
+        for preset in default_presets:
+            preset["created_at"] = datetime.now(timezone.utc).isoformat()
+            await db.volunteer_query_presets.insert_one(preset)
+        presets = default_presets
+    
+    return {"presets": presets}
+
+@api_router.post("/marshal/query-presets")
+async def save_query_preset(request: Request, preset: dict):
+    """
+    Save a query preset for future use.
+    """
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin", "operations_manager"])
+    
+    name = preset.get("name")
+    description = preset.get("description", "")
+    filters = preset.get("filters", {})
+    
+    if not name:
+        raise HTTPException(status_code=400, detail="Preset name is required")
+    
+    new_preset = {
+        "preset_id": str(uuid.uuid4()),
+        "name": name,
+        "description": description,
+        "filters": filters,
+        "created_by": session.get("username"),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    await db.audit_logs.insert_one(log_entry)
+    
+    await db.volunteer_query_presets.insert_one(new_preset)
+    
+    return {"success": True, "preset_id": new_preset["preset_id"], "message": "Query preset saved"}
+
+@api_router.delete("/marshal/query-presets/{preset_id}")
+async def delete_query_preset(request: Request, preset_id: str):
+    """
+    Delete a saved query preset.
+    """
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "admin"])
+    
+    result = await db.volunteer_query_presets.delete_one({"preset_id": preset_id})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    
+    return {"success": True, "message": "Preset deleted"}
 
 # ===================== TOURNAMENT APIs =====================
 @api_router.get("/tournaments")
@@ -2380,10 +3355,142 @@ async def get_current_tournament():
         tournament = await db.tournaments.find_one({"is_active": True}, {"_id": 0})
     return tournament
 
+async def seed_accreditation_modules(tournament_id: str):
+    """Seed default accreditation modules for a tournament"""
+    modules = [
+        {
+            "module_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "module_type": "volunteers",
+            "name": "Volunteer Registration",
+            "slug": "volunteer-registration",
+            "description": "Register as a volunteer",
+            "form_id": None,
+            "is_active": True,
+            "is_public": True,
+            "settings": {},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "module_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "module_type": "media",
+            "name": "Media Accreditation",
+            "slug": "media-accreditation",
+            "description": "Apply for media accreditation",
+            "form_id": None,
+            "is_active": True,
+            "is_public": True,
+            "settings": {},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "module_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "module_type": "vendors",
+            "name": "Vendor Application",
+            "slug": "vendor-application",
+            "description": "Apply as a vendor",
+            "form_id": None,
+            "is_active": True,
+            "is_public": True,
+            "settings": {},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "module_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "module_type": "pro_am",
+            "name": "Pro-Am Registration",
+            "slug": "pro-am-registration",
+            "description": "Register for the Pro-Am tournament",
+            "form_id": None,
+            "is_active": True,
+            "is_public": True,
+            "settings": {},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+    ]
+    
+    for module in modules:
+        await db.accreditation_modules.insert_one(module)
+
+async def seed_default_locations(tournament_id: str):
+    """Seed default locations for a tournament"""
+    locations = [
+        {
+            "location_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "name": "Karen Country Club",
+            "code": "KCC",
+            "location_type": "venue",
+            "parent_location_id": None,
+            "capacity": None,
+            "description": "Main tournament venue",
+            "coordinates": None,
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+    ]
+    
+    for location in locations:
+        await db.locations.insert_one(location)
+
+async def seed_default_access_levels(tournament_id: str):
+    """Seed default access levels for a tournament"""
+    levels = [
+        {
+            "access_level_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "name": "All Access",
+            "code": "AA",
+            "tier": 1,
+            "color": "#FF0000",
+            "description": "Full access to all areas",
+            "allowed_zone_ids": [],
+            "allowed_module_types": ["volunteers", "media", "vendors", "pro_am"],
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        },
+        {
+            "access_level_id": str(uuid.uuid4()),
+            "tournament_id": tournament_id,
+            "name": "General Public",
+            "code": "GP",
+            "tier": 10,
+            "color": "#00AA00",
+            "description": "General public spectator access",
+            "allowed_zone_ids": [],
+            "allowed_module_types": [],
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+    ]
+    
+    for level in levels:
+        await db.access_levels.insert_one(level)
+
+async def log_audit(request: Request, user_id: str, username: str, action: str, entity_type: str, entity_id: str, old_value: dict, new_value: dict, tournament_id: str = None):
+    """Log an audit trail entry"""
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "tournament_id": tournament_id,
+        "user_id": user_id,
+        "username": username,
+        "action": action,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "old_value": old_value,
+        "new_value": new_value,
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
 @api_router.post("/tournaments")
 async def create_tournament(request: Request, data: dict):
     """Create a new tournament"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director"])
     
     tournament = {
         "tournament_id": str(uuid.uuid4()),
@@ -2413,7 +3520,7 @@ async def create_tournament(request: Request, data: dict):
 @api_router.put("/tournaments/{tournament_id}")
 async def update_tournament(request: Request, tournament_id: str, data: dict):
     """Update a tournament"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director"])
     
     old_tournament = await db.tournaments.find_one({"tournament_id": tournament_id}, {"_id": 0})
     if not old_tournament:
@@ -2441,7 +3548,6 @@ async def list_accreditation_modules(request: Request, tournament_id: Optional[s
     if tournament_id:
         query["tournament_id"] = tournament_id
     else:
-        # Get current tournament
         current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
         if current:
             query["tournament_id"] = current["tournament_id"]
@@ -2466,7 +3572,7 @@ async def list_public_modules():
 @api_router.put("/accreditation/modules/{module_id}")
 async def update_accreditation_module(request: Request, module_id: str, data: dict):
     """Update an accreditation module"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
     
     old_module = await db.accreditation_modules.find_one({"module_id": module_id}, {"_id": 0})
     if not old_module:
@@ -2500,9 +3606,8 @@ async def list_locations(request: Request, tournament_id: Optional[str] = None):
 @api_router.post("/locations")
 async def create_location(request: Request, data: dict):
     """Create a new location"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "operations_manager", "admin"])
     
-    # Get tournament_id
     tournament_id = data.get("tournament_id")
     if not tournament_id:
         current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
@@ -2533,7 +3638,7 @@ async def create_location(request: Request, data: dict):
 @api_router.put("/locations/{location_id}")
 async def update_location(request: Request, location_id: str, data: dict):
     """Update a location"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "operations_manager", "admin"])
     
     old_location = await db.locations.find_one({"location_id": location_id}, {"_id": 0})
     if not old_location:
@@ -2550,7 +3655,7 @@ async def update_location(request: Request, location_id: str, data: dict):
 @api_router.delete("/locations/{location_id}")
 async def delete_location(request: Request, location_id: str):
     """Delete a location"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director"])
     
     location = await db.locations.find_one({"location_id": location_id}, {"_id": 0})
     if not location:
@@ -2584,7 +3689,7 @@ async def list_zones(request: Request, tournament_id: Optional[str] = None, loca
 @api_router.post("/zones")
 async def create_zone(request: Request, data: dict):
     """Create a new zone"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "operations_manager", "admin"])
     
     tournament_id = data.get("tournament_id")
     if not tournament_id:
@@ -2616,7 +3721,7 @@ async def create_zone(request: Request, data: dict):
 @api_router.put("/zones/{zone_id}")
 async def update_zone(request: Request, zone_id: str, data: dict):
     """Update a zone"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "operations_manager", "admin"])
     
     old_zone = await db.zones.find_one({"zone_id": zone_id}, {"_id": 0})
     if not old_zone:
@@ -2633,7 +3738,7 @@ async def update_zone(request: Request, zone_id: str, data: dict):
 @api_router.delete("/zones/{zone_id}")
 async def delete_zone(request: Request, zone_id: str):
     """Delete a zone"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director"])
     
     zone = await db.zones.find_one({"zone_id": zone_id}, {"_id": 0})
     if not zone:
@@ -2664,7 +3769,7 @@ async def list_access_levels(request: Request, tournament_id: Optional[str] = No
 @api_router.post("/access-levels")
 async def create_access_level(request: Request, data: dict):
     """Create a new access level"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
     
     tournament_id = data.get("tournament_id")
     if not tournament_id:
@@ -2696,7 +3801,7 @@ async def create_access_level(request: Request, data: dict):
 @api_router.put("/access-levels/{level_id}")
 async def update_access_level(request: Request, level_id: str, data: dict):
     """Update an access level"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
     
     old_level = await db.access_levels.find_one({"access_level_id": level_id}, {"_id": 0})
     if not old_level:
@@ -2713,7 +3818,7 @@ async def update_access_level(request: Request, level_id: str, data: dict):
 @api_router.delete("/access-levels/{level_id}")
 async def delete_access_level(request: Request, level_id: str):
     """Delete an access level"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director"])
     
     level = await db.access_levels.find_one({"access_level_id": level_id}, {"_id": 0})
     if not level:
@@ -2815,7 +3920,7 @@ async def get_submission(request: Request, submission_id: str):
 @api_router.put("/accreditation/submissions/{submission_id}")
 async def update_submission(request: Request, submission_id: str, data: dict):
     """Update a submission (status, assignment, notes)"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "operations_manager", "admin", "coordinator"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "operations_manager", "admin", "coordinator"])
     
     old_submission = await db.accreditation_submissions.find_one({"submission_id": submission_id}, {"_id": 0})
     if not old_submission:
@@ -2884,7 +3989,7 @@ async def list_audit_logs(
     limit: int = 100
 ):
     """List audit logs"""
-    session = await require_marshal_role(request, ["chief_marshal", "tournament_director", "admin"])
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
     
     query = {}
     if entity_type:
@@ -2905,7 +4010,11 @@ async def export_accreditation_submissions(request: Request, module_type: str, s
     
     current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
     if not current:
-        return []
+        return StreamingResponse(
+            iter(["No data"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={module_type}_export.csv"}
+        )
     
     query = {"tournament_id": current["tournament_id"], "module_type": module_type}
     if status:
@@ -2913,24 +4022,9 @@ async def export_accreditation_submissions(request: Request, module_type: str, s
     
     submissions = await db.accreditation_submissions.find(query, {"_id": 0}).to_list(5000)
     
-    if not submissions:
-        return StreamingResponse(
-            iter(["No data"]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={module_type}_export.csv"}
-        )
-    
-    # Flatten form_data for CSV
     output = io.StringIO()
-    
-    # Get all possible keys from form_data
-    all_keys = set()
-    for sub in submissions:
-        if sub.get("form_data"):
-            all_keys.update(sub["form_data"].keys())
-    
-    fieldnames = ["submission_id", "status", "created_at", "reviewed_at"] + sorted(all_keys)
-    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    fieldnames = ["submission_id", "status", "created_at", "reviewed_at"] + sorted(set().union(*(sub.get("form_data", {}).keys() for sub in submissions)))
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     
     for sub in submissions:
@@ -2940,8 +4034,7 @@ async def export_accreditation_submissions(request: Request, module_type: str, s
             "created_at": sub["created_at"],
             "reviewed_at": sub.get("reviewed_at", "")
         }
-        if sub.get("form_data"):
-            row.update(sub["form_data"])
+        row.update(sub.get("form_data", {}))
         writer.writerow(row)
     
     output.seek(0)
@@ -2950,6 +4043,2168 @@ async def export_accreditation_submissions(request: Request, module_type: str, s
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={module_type}_export.csv"}
     )
+
+@api_router.get("/accreditation/export-badges/{module_type}")
+async def export_badge_ready_data(request: Request, module_type: str, status: str = "approved"):
+    """Export badge-ready data for approved submissions - formatted for badge printing"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not current:
+        return StreamingResponse(
+            iter(["No active tournament"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={module_type}_badges.csv"}
+        )
+    
+    query = {"tournament_id": current["tournament_id"], "module_type": module_type, "status": status}
+    submissions = await db.accreditation_submissions.find(query, {"_id": 0}).to_list(5000)
+    
+    if not submissions:
+        return StreamingResponse(
+            iter(["No approved submissions found"]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={module_type}_badges.csv"}
+        )
+    
+    output = io.StringIO()
+    
+    # Badge-specific fields - standardized for badge printing software
+    badge_fieldnames = [
+        "badge_id",
+        "full_name",
+        "first_name",
+        "last_name",
+        "organization",
+        "role",
+        "accreditation_type",
+        "access_level",
+        "zone_access",
+        "email",
+        "phone",
+        "photo_url",
+        "qr_code_data",
+        "valid_from",
+        "valid_to",
+        "created_at"
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=badge_fieldnames)
+    writer.writeheader()
+    
+    for sub in submissions:
+        form_data = sub.get("form_data", {})
+        
+        # Extract name parts
+        full_name = form_data.get("full_name", form_data.get("name", form_data.get("contact_name", "")))
+        name_parts = full_name.split(" ", 1) if full_name else ["", ""]
+        first_name = name_parts[0] if len(name_parts) > 0 else ""
+        last_name = name_parts[1] if len(name_parts) > 1 else ""
+        
+        # Determine access level based on module type
+        access_level_map = {
+            "media": "Media Zone",
+            "vendors": "Service Area",
+            "pro_am": "VIP/Player Area",
+            "volunteers": "General Access",
+            "procurement": "Service Area",
+            "jobs": "Staff Area"
+        }
+        
+        badge_row = {
+            "badge_id": sub["submission_id"].upper(),
+            "full_name": full_name,
+            "first_name": first_name,
+            "last_name": last_name,
+            "organization": form_data.get("organization", form_data.get("company_name", form_data.get("media_outlet", ""))),
+            "role": form_data.get("role", form_data.get("job_title", form_data.get("position", module_type.title()))),
+            "accreditation_type": module_type.upper().replace("_", " "),
+            "access_level": access_level_map.get(module_type, "General"),
+            "zone_access": form_data.get("zone_access", "All Public Areas"),
+            "email": form_data.get("email", ""),
+            "phone": form_data.get("phone", form_data.get("phone_number", "")),
+            "photo_url": form_data.get("photo_url", form_data.get("headshot_url", "")),
+            "qr_code_data": f"MKO2026-{sub['submission_id'].upper()}",
+            "valid_from": current.get("start_date", "2026-02-19"),
+            "valid_to": current.get("end_date", "2026-02-22"),
+            "created_at": sub.get("created_at", "")
+        }
+        
+        writer.writerow(badge_row)
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={module_type}_badges_{status}.csv"}
+    )
+
+@api_router.get("/accreditation/badge-stats")
+async def get_badge_stats(request: Request):
+    """Get badge printing statistics"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    if not current:
+        return {"total_approved": 0, "by_module": {}}
+    
+    pipeline = [
+        {"$match": {"tournament_id": current["tournament_id"], "status": "approved"}},
+        {"$group": {"_id": "$module_type", "count": {"$sum": 1}}}
+    ]
+    
+    results = await db.accreditation_submissions.aggregate(pipeline).to_list(100)
+    
+    by_module = {r["_id"]: r["count"] for r in results}
+    total = sum(by_module.values())
+    
+    return {
+        "total_approved": total,
+        "by_module": by_module,
+        "tournament_name": current.get("name", "Magical Kenya Open 2026")
+    }
+
+# ===================== PRO-AM MODULE APIs =====================
+# Pro-Am Registration Model
+class ProAmRegistration(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone: str
+    nationality: str
+    passport_id: str
+    date_of_birth: Optional[str] = None
+    gender: str
+    handicap: float
+    handicap_type: str = "WHS"
+    home_club: str
+    club_membership_number: Optional[str] = None
+    playing_experience_years: Optional[int] = None
+    company_name: Optional[str] = None
+    company_position: Optional[str] = None
+    preferred_date: str = "wednesday"
+    previous_proams: Optional[str] = None
+    guest_count: int = 0
+    guest_names: Optional[str] = None
+    dietary_requirements: Optional[str] = None
+    special_requests: Optional[str] = None
+    shirt_size: str
+    emergency_contact_name: str
+    emergency_contact_phone: str
+    emergency_contact_relation: Optional[str] = None
+    payment_method: Optional[str] = None
+    terms_accepted: bool
+    data_consent: bool
+    photo_consent: bool = False
+    documents: Optional[Dict[str, str]] = None
+
+# Pro-Am Tee Time Model
+class ProAmTeeTime(BaseModel):
+    tee_time_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tee_number: int # 1 or 10
+    tee_time: str # HH:MM format
+    professional_name: str
+    professional_id: Optional[str] = None
+    wave: str = "morning" # morning or afternoon
+    players: List[Dict[str, Any]] = [] # List of amateur players assigned
+
+# Pro-Am Pairing Model
+class ProAmPairing(BaseModel):
+    pairing_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    tournament_id: str
+    professional_name: str
+    professional_id: Optional[str] = None
+    amateur_ids: List[str] = [] # Up to 3 amateur registration IDs
+    tee_time_id: Optional[str] = None
+    is_finalized: bool = False
+
+@api_router.get("/pro-am/status")
+async def get_proam_status():
+    """Get Pro-Am registration status"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    # Count registrations
+    total_registrations = await db.proam_registrations.count_documents(
+        {"tournament_id": tournament_id} if tournament_id else {}
+    )
+    
+    # Max capacity (configurable, default 60 amateur spots = 20 groups * 3 amateurs)
+    max_capacity = 60
+    
+    # Check if registration is open (could be stored in tournament settings)
+    settings = await db.proam_settings.find_one({"tournament_id": tournament_id}, {"_id": 0})
+    registration_open = settings.get("registration_open", True) if settings else True
+    
+    return {
+        "registration_open": registration_open and total_registrations < max_capacity,
+        "total_registrations": total_registrations,
+        "max_capacity": max_capacity,
+        "spots_remaining": max(0, max_capacity - total_registrations)
+    }
+
+@api_router.post("/pro-am/upload-document")
+async def upload_proam_document(file: UploadFile = File(...), document_type: str = ""):
+    """Upload a Pro-Am registration document"""
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, WebP, or PDF allowed.")
+    
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be less than 5MB")
+    
+    # Generate unique filename
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    file_id = str(uuid.uuid4())
+    filename = f"proam_{document_type}_{file_id}.{ext}"
+    
+    # Save to uploads directory (in production, use external storage)
+    proam_dir = UPLOAD_DIR / "proam"
+    proam_dir.mkdir(exist_ok=True)
+    
+    file_path = proam_dir / filename
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(contents)
+    
+    return {
+        "success": True,
+        "file_id": file_id,
+        "file_url": f"/api/uploads/proam/{filename}",
+        "filename": filename
+    }
+
+@api_router.post("/pro-am/register")
+async def register_proam(registration: ProAmRegistration):
+    """Register for Pro-Am tournament"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else str(uuid.uuid4())
+    
+    # Validate handicap
+    if registration.gender == "male" and registration.handicap > 24.0:
+        raise HTTPException(status_code=400, detail="Men's handicap must be 24.0 or lower")
+    if registration.gender == "female" and registration.handicap > 32.0:
+        raise HTTPException(status_code=400, detail="Ladies' handicap must be 32.0 or lower")
+    
+    # Check for duplicate registration (same email or passport)
+    existing = await db.proam_registrations.find_one({
+        "tournament_id": tournament_id,
+        "$or": [
+            {"email": registration.email.lower()},
+            {"passport_id": registration.passport_id}
+        ]
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="You have already registered for this Pro-Am event")
+    
+    # Check capacity
+    status = await get_proam_status()
+    if not status["registration_open"]:
+        raise HTTPException(status_code=400, detail="Pro-Am registration is currently closed")
+    
+    # Create registration
+    registration_id = str(uuid.uuid4())
+    reg_data = {
+        "registration_id": registration_id,
+        "tournament_id": tournament_id,
+        **registration.dict(),
+        "email": registration.email.lower(),
+        "status": "submitted", # submitted, approved, rejected, paid, confirmed, cancelled
+        "payment_status": "pending", # pending, received, verified, waived
+        "payment_amount": 30000, # KES
+        "documents_verified": False,
+        "handicap_verified": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.proam_registrations.insert_one(reg_data)
+    
+    # Log audit
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "action": "create",
+        "entity_type": "proam_registration",
+        "entity_id": registration_id,
+        "user_id": "public",
+        "details": {"email": registration.email, "name": registration.full_name},
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {
+        "success": True,
+        "registration_id": registration_id,
+        "message": "Registration submitted successfully. You will receive confirmation via email."
+    }
+
+@api_router.get("/pro-am/registrations")
+async def list_proam_registrations(
+    request: Request,
+    status: Optional[str] = None,
+    payment_status: Optional[str] = None
+):
+    """List Pro-Am registrations (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    query = {"tournament_id": tournament_id} if tournament_id else {}
+    if status:
+        query["status"] = status
+    if payment_status:
+        query["payment_status"] = payment_status
+    
+    registrations = await db.proam_registrations.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return registrations
+
+@api_router.get("/pro-am/registrations/{registration_id}")
+async def get_proam_registration(request: Request, registration_id: str):
+    """Get single Pro-Am registration (admin only)"""
+    await require_marshal_auth(request)
+    
+    registration = await db.proam_registrations.find_one(
+        {"registration_id": registration_id}, {"_id": 0}
+    )
+    if not registration:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    return registration
+
+@api_router.put("/pro-am/registrations/{registration_id}")
+async def update_proam_registration(request: Request, registration_id: str, updates: Dict[str, Any]):
+    """Update Pro-Am registration (admin only)"""
+    session = await require_marshal_auth(request)
+    
+    allowed_fields = [
+        "status", "payment_status", "documents_verified", "handicap_verified",
+        "reviewer_notes", "assigned_group", "tee_time_id"
+    ]
+    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+    filtered_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    filtered_updates["reviewed_by"] = session.get("username")
+    
+    result = await db.proam_registrations.update_one(
+        {"registration_id": registration_id},
+        {"$set": filtered_updates}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    
+    # Audit log
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "action": "update",
+        "entity_type": "proam_registration",
+        "entity_id": registration_id,
+        "user_id": session.get("marshal_id"),
+        "details": filtered_updates,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"success": True}
+
+@api_router.get("/pro-am/stats")
+async def get_proam_stats(request: Request):
+    """Get Pro-Am statistics (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    query = {"tournament_id": tournament_id} if tournament_id else {}
+    
+    pipeline = [
+        {"$match": query},
+        {"$group": {
+            "_id": "$status",
+            "count": {"$sum": 1}
+        }}
+    ]
+    
+    status_counts = {}
+    async for doc in db.proam_registrations.aggregate(pipeline):
+        status_counts[doc["_id"]] = doc["count"]
+    
+    # Payment stats
+    payment_pipeline = [
+        {"$match": query},
+        {"$group": {
+            "_id": "$payment_status",
+            "count": {"$sum": 1}
+        }}
+    ]
+    
+    payment_counts = {}
+    async for doc in db.proam_registrations.aggregate(payment_pipeline):
+        payment_counts[doc["_id"]] = doc["count"]
+    
+    total = await db.proam_registrations.count_documents(query)
+    
+    return {
+        "total_registrations": total,
+        "by_status": status_counts,
+        "by_payment": payment_counts,
+        "max_capacity": 60,
+        "spots_remaining": max(0, 60 - total)
+    }
+
+# ===================== PRO-AM TEE TIMES & PAIRINGS =====================
+@api_router.get("/pro-am/tee-times/public")
+async def get_public_tee_times():
+    """Get published Pro-Am tee times (public)"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    # Check if draw is published
+    settings = await db.proam_settings.find_one({"tournament_id": tournament_id}, {"_id": 0})
+    is_published = settings.get("draw_published", False) if settings else False
+    
+    if not is_published:
+        return {"is_published": False, "tee_times": []}
+    
+    tee_times = await db.proam_tee_times.find(
+        {"tournament_id": tournament_id, "is_active": True},
+        {"_id": 0}
+    ).sort([("tee_number", 1), ("tee_time", 1)]).to_list(100)
+    
+    # Enrich with player names
+    for tt in tee_times:
+        player_details = []
+        for player_id in tt.get("player_ids", []):
+            reg = await db.proam_registrations.find_one(
+                {"registration_id": player_id},
+                {"_id": 0, "full_name": 1, "handicap": 1, "home_club": 1}
+            )
+            if reg:
+                player_details.append({
+                    "name": reg["full_name"],
+                    "handicap": reg["handicap"],
+                    "club": reg.get("home_club", "")
+                })
+        tt["players"] = player_details
+        tt["professional"] = tt.get("professional_name", "TBD")
+    
+    return {"is_published": is_published, "tee_times": tee_times}
+
+@api_router.get("/pro-am/tee-times")
+async def list_tee_times(request: Request):
+    """List all tee times (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    tee_times = await db.proam_tee_times.find(
+        {"tournament_id": tournament_id},
+        {"_id": 0}
+    ).sort([("tee_number", 1), ("tee_time", 1)]).to_list(100)
+    
+    # Enrich with player details
+    for tt in tee_times:
+        player_details = []
+        for player_id in tt.get("player_ids", []):
+            reg = await db.proam_registrations.find_one(
+                {"registration_id": player_id},
+                {"_id": 0, "full_name": 1, "handicap": 1, "home_club": 1, "status": 1}
+            )
+            if reg:
+                player_details.append({
+                    "id": player_id,
+                    "name": reg["full_name"],
+                    "handicap": reg["handicap"],
+                    "club": reg.get("home_club", ""),
+                    "status": reg.get("status", "")
+                })
+        tt["players"] = player_details
+    
+    return tee_times
+
+@api_router.post("/pro-am/tee-times")
+async def create_tee_time(request: Request, tee_time: ProAmTeeTime):
+    """Create a tee time slot (admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else str(uuid.uuid4())
+    
+    data = {
+        **tee_time.dict(),
+        "tournament_id": tournament_id,
+        "player_ids": [],
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": session.get("username")
+    }
+    
+    await db.proam_tee_times.insert_one(data)
+    
+    return {"success": True, "tee_time_id": tee_time.tee_time_id}
+
+@api_router.put("/pro-am/tee-times/{tee_time_id}")
+async def update_tee_time(request: Request, tee_time_id: str, updates: Dict[str, Any]):
+    """Update tee time (admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    allowed_fields = [
+        "tee_number", "tee_time", "professional_name", "professional_id",
+        "wave", "player_ids", "is_active"
+    ]
+    filtered = {k: v for k, v in updates.items() if k in allowed_fields}
+    filtered["updated_at"] = datetime.now(timezone.utc).isoformat()
+    filtered["updated_by"] = session.get("username")
+    
+    result = await db.proam_tee_times.update_one(
+        {"tee_time_id": tee_time_id},
+        {"$set": filtered}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Tee time not found")
+    
+    return {"success": True}
+
+@api_router.delete("/pro-am/tee-times/{tee_time_id}")
+async def delete_tee_time(request: Request, tee_time_id: str):
+    """Delete tee time (admin only)"""
+    await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    result = await db.proam_tee_times.delete_one({"tee_time_id": tee_time_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Tee time not found")
+    
+    return {"success": True}
+
+@api_router.post("/pro-am/tee-times/{tee_time_id}/assign-player")
+async def assign_player_to_tee_time(request: Request, tee_time_id: str, player_id: str):
+    """Assign a player to a tee time (admin only)"""
+    await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    # Verify player exists and is approved
+    player = await db.proam_registrations.find_one({"registration_id": player_id})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    # Check if player already assigned elsewhere
+    existing = await db.proam_tee_times.find_one({"player_ids": player_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Player already assigned to another tee time")
+    
+    # Get tee time and check capacity (max 3 amateurs)
+    tee_time = await db.proam_tee_times.find_one({"tee_time_id": tee_time_id})
+    if not tee_time:
+        raise HTTPException(status_code=404, detail="Tee time not found")
+    
+    if len(tee_time.get("player_ids", [])) >= 3:
+        raise HTTPException(status_code=400, detail="Tee time already has maximum 3 amateur players")
+    
+    # Add player
+    await db.proam_tee_times.update_one(
+        {"tee_time_id": tee_time_id},
+        {"$push": {"player_ids": player_id}}
+    )
+    
+    # Update player's assigned group
+    await db.proam_registrations.update_one(
+        {"registration_id": player_id},
+        {"$set": {"tee_time_id": tee_time_id, "status": "assigned"}}
+    )
+    
+    return {"success": True}
+
+@api_router.post("/pro-am/tee-times/{tee_time_id}/remove-player")
+async def remove_player_from_tee_time(request: Request, tee_time_id: str, player_id: str):
+    """Remove a player from a tee time (admin only)"""
+    await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    await db.proam_tee_times.update_one(
+        {"tee_time_id": tee_time_id},
+        {"$pull": {"player_ids": player_id}}
+    )
+    
+    await db.proam_registrations.update_one(
+        {"registration_id": player_id},
+        {"$set": {"tee_time_id": None}, "$unset": {"assigned_group": ""}}
+    )
+    
+    return {"success": True}
+
+# ===================== PRO-AM SETTINGS =====================
+@api_router.get("/pro-am/settings")
+async def get_proam_settings(request: Request):
+    """Get Pro-Am settings (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    settings = await db.proam_settings.find_one({"tournament_id": tournament_id}, {"_id": 0})
+    
+    return settings or {
+        "tournament_id": tournament_id,
+        "registration_open": True,
+        "draw_published": False,
+        "max_capacity": 60,
+        "entry_fee": 30000,
+        "proam_date": "2026-02-19",
+        "check_in_opens": "2026-02-19T06:00:00",
+        "first_tee_time": "07:00"
+    }
+
+@api_router.put("/pro-am/settings")
+async def update_proam_settings(request: Request, settings: Dict[str, Any]):
+    """Update Pro-Am settings (admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else str(uuid.uuid4())
+    
+    allowed_fields = [
+        "registration_open", "draw_published", "max_capacity", "entry_fee",
+        "proam_date", "check_in_opens", "first_tee_time", "draw_locked"
+    ]
+    filtered = {k: v for k, v in settings.items() if k in allowed_fields}
+    filtered["updated_at"] = datetime.now(timezone.utc).isoformat()
+    filtered["updated_by"] = session.get("username")
+    
+    await db.proam_settings.update_one(
+        {"tournament_id": tournament_id},
+        {"$set": filtered, "$setOnInsert": {"tournament_id": tournament_id}},
+        upsert=True
+    )
+    
+    # Audit log
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "action": "update",
+        "entity_type": "proam_settings",
+        "entity_id": tournament_id,
+        "user_id": session.get("marshal_id"),
+        "details": filtered,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"success": True}
+
+@api_router.post("/pro-am/publish-draw")
+async def publish_proam_draw(request: Request):
+    """Publish the Pro-Am draw (admin only)"""
+    session = await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    # Update settings
+    await db.proam_settings.update_one(
+        {"tournament_id": tournament_id},
+        {
+            "$set": {
+                "draw_published": True,
+                "draw_published_at": datetime.now(timezone.utc).isoformat(),
+                "published_by": session.get("username")
+            },
+            "$setOnInsert": {"tournament_id": tournament_id}
+        },
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Pro-Am draw published successfully"}
+
+@api_router.post("/pro-am/unpublish-draw")
+async def unpublish_proam_draw(request: Request):
+    """Unpublish the Pro-Am draw (admin only)"""
+    await require_marshal_role(request, ["chief_marshal", "cio", "tournament_director", "admin"])
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    await db.proam_settings.update_one(
+        {"tournament_id": tournament_id},
+        {"$set": {"draw_published": False}}
+    )
+    
+    return {"success": True}
+
+# ===================== PRO-AM CHECK-IN =====================
+@api_router.post("/pro-am/check-in/{registration_id}")
+async def proam_check_in(request: Request, registration_id: str):
+    """Check in a Pro-Am participant (admin only)"""
+    session = await require_marshal_auth(request)
+    
+    result = await db.proam_registrations.update_one(
+        {"registration_id": registration_id},
+        {
+            "$set": {
+                "checked_in": True,
+                "checked_in_at": datetime.now(timezone.utc).isoformat(),
+                "checked_in_by": session.get("username")
+            }
+        }
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    
+    return {"success": True}
+
+@api_router.post("/pro-am/check-out/{registration_id}")
+async def proam_check_out(request: Request, registration_id: str):
+    """Undo check-in for a Pro-Am participant (admin only)"""
+    await require_marshal_auth(request)
+    
+    result = await db.proam_registrations.update_one(
+        {"registration_id": registration_id},
+        {"$set": {"checked_in": False}, "$unset": {"checked_in_at": "", "checked_in_by": ""}}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Registration not found")
+    
+    return {"success": True}
+
+# ===================== PRO-AM EXPORT =====================
+@api_router.get("/pro-am/export/registrations")
+async def export_proam_registrations(request: Request, status: Optional[str] = None):
+    """Export Pro-Am registrations as CSV (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    query = {"tournament_id": tournament_id} if tournament_id else {}
+    if status:
+        query["status"] = status
+    
+    registrations = await db.proam_registrations.find(query, {"_id": 0}).to_list(500)
+    
+    output = io.StringIO()
+    fieldnames = [
+        "registration_id", "full_name", "email", "phone", "nationality",
+        "gender", "handicap", "home_club", "company_name", "status",
+        "payment_status", "shirt_size", "dietary_requirements", "created_at"
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    
+    for reg in registrations:
+        writer.writerow(reg)
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=proam_registrations.csv"}
+    )
+
+@api_router.get("/pro-am/export/tee-sheet")
+async def export_proam_tee_sheet(request: Request):
+    """Export Pro-Am tee sheet as CSV (admin only)"""
+    await require_marshal_auth(request)
+    
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else None
+    
+    tee_times = await db.proam_tee_times.find(
+        {"tournament_id": tournament_id, "is_active": True},
+        {"_id": 0}
+    ).sort([("tee_number", 1), ("tee_time", 1)]).to_list(100)
+    
+    output = io.StringIO()
+    fieldnames = ["tee_number", "tee_time", "professional", "player_1", "handicap_1", "player_2", "handicap_2", "player_3", "handicap_3"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for tt in tee_times:
+        row = {
+            "tee_number": tt.get("tee_number", ""),
+            "tee_time": tt.get("tee_time", ""),
+            "professional": tt.get("professional_name", "TBD")
+        }
+        
+        # Get player details
+        for i, player_id in enumerate(tt.get("player_ids", [])[:3]):
+            reg = await db.proam_registrations.find_one(
+                {"registration_id": player_id},
+                {"_id": 0, "full_name": 1, "handicap": 1}
+            )
+            if reg:
+                row[f"player_{i+1}"] = reg["full_name"]
+                row[f"handicap_{i+1}"] = reg["handicap"]
+        
+        writer.writerow(row)
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=proam_tee_sheet.csv"}
+    )
+
+# Serve Pro-Am uploaded files
+@api_router.get("/uploads/proam/{filename}")
+async def serve_proam_file(filename: str):
+    """Serve Pro-Am uploaded files"""
+    file_path = UPLOAD_DIR / "proam" / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
+
+# ===================== WEBMASTER PORTAL APIs =====================
+# Webmaster role and authentication
+class WebmasterRole(str, Enum):
+    WEBMASTER = "webmaster"
+    CONTENT_MANAGER = "content_manager"
+    EDITOR = "editor"
+
+async def seed_webmaster_user():
+    """Create default webmaster account if none exists"""
+    try:
+        existing = await db.webmaster_users.find_one({"role": "webmaster"}, {"_id": 0})
+        if not existing:
+            default_user = {
+                "user_id": str(uuid.uuid4()),
+                "username": "webmaster",
+                "password_hash": hash_password("MKO2026Web!"),
+                "full_name": "Webmaster",
+                "role": "webmaster",
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.webmaster_users.insert_one(default_user)
+            logger.info("Default webmaster account created: username='webmaster', password='MKO2026Web!'")
+        else:
+            logger.info("Webmaster account already exists")
+    except Exception as e:
+        logger.error(f"Failed to seed webmaster user: {e}")
+
+async def migrate_usernames_to_lowercase():
+    """One-time migration to convert all existing usernames to lowercase"""
+    try:
+        # Migrate marshal_users
+        marshal_count = 0
+        async for user in db.marshal_users.find({}):
+            current_username = user.get("username", "")
+            if current_username != current_username.lower():
+                await db.marshal_users.update_one(
+                    {"_id": user["_id"]},
+                    {"$set": {"username": current_username.lower()}}
+                )
+                marshal_count += 1
+                logger.info(f"Migrated marshal username '{current_username}' -> '{current_username.lower()}'")
+        
+        # Migrate webmaster_users
+        webmaster_count = 0
+        async for user in db.webmaster_users.find({}):
+            current_username = user.get("username", "")
+            if current_username != current_username.lower():
+                await db.webmaster_users.update_one(
+                    {"_id": user["_id"]},
+                    {"$set": {"username": current_username.lower()}}
+                )
+                webmaster_count += 1
+                logger.info(f"Migrated webmaster username '{current_username}' -> '{current_username.lower()}'")
+        
+        if marshal_count > 0 or webmaster_count > 0:
+            logger.info(f"Username migration complete: {marshal_count} marshal users, {webmaster_count} webmaster users updated")
+        else:
+            logger.info("Username migration: No updates needed, all usernames already lowercase")
+    except Exception as e:
+        logger.error(f"Username migration failed: {e}")
+
+async def require_cio_auth(request: Request):
+    """Require CIO role for super admin access"""
+    session = await require_marshal_auth(request)
+    if session.get("role") != "cio":
+        raise HTTPException(status_code=403, detail="CIO access required")
+    return session
+
+@api_router.get("/superadmin/webmaster-users")
+async def list_webmaster_users(request: Request):
+    """List all webmaster users (CIO only)"""
+    await require_cio_auth(request)
+    users = await db.webmaster_users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
+    return users
+
+@api_router.post("/superadmin/webmaster-users")
+async def create_webmaster_user(request: Request, user_data: dict):
+    """Create a webmaster user (CIO only)"""
+    await require_cio_auth(request)
+    
+    username = user_data.get("username", "").lower()
+    password = user_data.get("password", "")
+    full_name = user_data.get("full_name", "")
+    role = user_data.get("role", "webmaster")
+    
+    if not username or not password or not full_name:
+        raise HTTPException(status_code=400, detail="Username, password, and full name are required")
+    
+    existing = await db.webmaster_users.find_one({"username": username}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    new_user = {
+        "user_id": str(uuid.uuid4()),
+        "username": username,
+        "password_hash": hash_password(password),
+        "full_name": full_name,
+        "role": role,
+        "is_active": user_data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.webmaster_users.insert_one(new_user)
+    return {"success": True, "message": "Webmaster user created", "user_id": new_user["user_id"]}
+
+@api_router.put("/superadmin/webmaster-users/{user_id}")
+async def update_webmaster_user(request: Request, user_id: str, user_data: dict):
+    """Update a webmaster user (CIO only)"""
+    await require_cio_auth(request)
+    
+    existing = await db.webmaster_users.find_one({"user_id": user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    update_data = {}
+    if user_data.get("full_name"):
+        update_data["full_name"] = user_data["full_name"]
+    if user_data.get("role"):
+        update_data["role"] = user_data["role"]
+    if user_data.get("password"):
+        update_data["password_hash"] = hash_password(user_data["password"])
+    if "is_active" in user_data:
+        update_data["is_active"] = user_data["is_active"]
+    
+    if update_data:
+        await db.webmaster_users.update_one({"user_id": user_id}, {"$set": update_data})
+    
+    return {"success": True, "message": "User updated"}
+
+@api_router.delete("/superadmin/webmaster-users/{user_id}")
+async def delete_webmaster_user(request: Request, user_id: str):
+    """Delete a webmaster user (CIO only)"""
+    await require_cio_auth(request)
+    
+    result = await db.webmaster_users.delete_one({"user_id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Delete their sessions
+    await db.webmaster_sessions.delete_many({"user_id": user_id})
+    
+    return {"success": True, "message": "User deleted"}
+
+@api_router.get("/superadmin/stats")
+async def get_superadmin_stats(request: Request):
+    """Get system-wide statistics (CIO only)"""
+    await require_cio_auth(request)
+    
+    stats = {
+        "marshal_users": await db.marshal_users.count_documents({}),
+        "webmaster_users": await db.webmaster_users.count_documents({}),
+        "volunteers": await db.volunteers.count_documents({}),
+        "submissions": await db.accreditation_submissions.count_documents({}),
+        "proam_registrations": await db.proam_registrations.count_documents({}),
+        "news_articles": await db.news_articles.count_documents({}),
+        "gallery_items": await db.gallery_items.count_documents({})
+    }
+    
+    return stats
+
+# ===================== EMAIL TEST ENDPOINT =====================
+@api_router.post("/superadmin/test-email")
+async def test_email_sending(request: Request, data: dict):
+    """Test email sending functionality (CIO only)"""
+    await require_cio_auth(request)
+    
+    to_email = data.get("to_email")
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Email address required")
+    
+    subject = "Magical Kenya Open - Test Email"
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <h1 style="color: #1a472a;">Test Email from MKO System</h1>
+        <p>This is a test email to verify the email notification system is working correctly.</p>
+        <p><strong>System:</strong> Magical Kenya Open 2026</p>
+        <p><strong>Timestamp:</strong> """ + datetime.now(timezone.utc).isoformat() + """</p>
+        <hr>
+        <p style="color: #666; font-size: 12px;">Kenya Open Golf Limited | Nairobi, Kenya</p>
+    </body>
+    </html>
+    """
+    
+    result = await send_email(to_email, subject, html_content, "Test email from MKO system")
+    
+    if result:
+        return {"success": True, "message": f"Test email sent to {to_email}"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send email. Check SMTP credentials.")
+
+# ===================== BULK EMAIL NOTIFICATION =====================
+@api_router.post("/superadmin/bulk-email")
+async def send_bulk_email(request: Request, data: dict):
+    """Send bulk email to selected recipients (CIO only)"""
+    await require_cio_auth(request)
+    
+    target_group = data.get("target_group") # volunteers, submissions, proam
+    status_filter = data.get("status", "approved") # approved, pending, all
+    subject = data.get("subject")
+    message = data.get("message")
+    
+    if not target_group or not subject or not message:
+        raise HTTPException(status_code=400, detail="target_group, subject, and message are required")
+    
+    # Collect email addresses based on target group
+    emails = []
+    
+    if target_group == "volunteers":
+        query = {"status": status_filter} if status_filter != "all" else {}
+        async for volunteer in db.volunteers.find(query, {"email": 1}):
+            if volunteer.get("email"):
+                emails.append(volunteer["email"])
+    
+    elif target_group == "submissions":
+        query = {"status": status_filter} if status_filter != "all" else {}
+        async for submission in db.accreditation_submissions.find(query, {"data.email": 1}):
+            email = submission.get("data", {}).get("email")
+            if email:
+                emails.append(email)
+    
+    elif target_group == "proam":
+        query = {"status": status_filter} if status_filter != "all" else {}
+        async for reg in db.proam_registrations.find(query, {"contact_email": 1}):
+            if reg.get("contact_email"):
+                emails.append(reg["contact_email"])
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid target_group. Use: volunteers, submissions, proam")
+    
+    # Remove duplicates
+    unique_emails = list(set(emails))
+    
+    if not unique_emails:
+        return {"success": False, "message": "No recipients found matching the criteria", "sent_count": 0}
+    
+    # Create HTML email template
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #1a472a 0%, #2d5016 100%); color: white; padding: 30px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .content {{ padding: 30px; background: #fff; }}
+            .footer {{ background: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Magical Kenya Open 2026</h1>
+            </div>
+            <div class="content">
+                <h2>{subject}</h2>
+                <div>{message.replace(chr(10), '<br>')}</div>
+            </div>
+            <div class="footer">
+                <p>Kenya Open Golf Limited | Nairobi, Kenya</p>
+                <p>This is an automated message from the MKO Accreditation System</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    plain_text = f"{subject}\n\n{message}\n\n---\nMagical Kenya Open 2026\nKenya Open Golf Limited"
+    
+    # Send emails (in batches to avoid overwhelming SMTP)
+    success_count = 0
+    failed_emails = []
+    
+    for email in unique_emails:
+        try:
+            result = await send_email(email, f"[MKO 2026] {subject}", html_content, plain_text)
+            if result:
+                success_count += 1
+            else:
+                failed_emails.append(email)
+        except Exception as e:
+            logger.error(f"Failed to send email to {email}: {e}")
+            failed_emails.append(email)
+    
+    # Log the bulk email action
+    await db.audit_logs.insert_one({
+        "log_id": str(uuid.uuid4()),
+        "action": "bulk_email_sent",
+        "target_group": target_group,
+        "status_filter": status_filter,
+        "total_recipients": len(unique_emails),
+        "success_count": success_count,
+        "failed_count": len(failed_emails),
+        "subject": subject,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "performed_by": "CIO"
+    })
+    
+    return {
+        "success": True,
+        "message": "Bulk email sent successfully",
+        "total_recipients": len(unique_emails),
+        "success_count": success_count,
+        "failed_count": len(failed_emails),
+        "failed_emails": failed_emails[:10] if failed_emails else [] # Show first 10 failed
+    }
+
+@api_router.get("/superadmin/bulk-email/preview")
+async def preview_bulk_email_recipients(request: Request, target_group: str, status: str = "approved"):
+    """Preview recipients for bulk email (CIO only)"""
+    await require_cio_auth(request)
+    
+    emails = []
+    
+    if target_group == "volunteers":
+        query = {"status": status} if status != "all" else {}
+        async for volunteer in db.volunteers.find(query, {"email": 1, "full_name": 1, "role": 1}):
+            if volunteer.get("email"):
+                emails.append({
+                    "email": volunteer["email"],
+                    "name": volunteer.get("full_name", "N/A"),
+                    "role": volunteer.get("role", "N/A")
+                })
+    
+    elif target_group == "submissions":
+        query = {"status": status} if status != "all" else {}
+        async for submission in db.accreditation_submissions.find(query, {"data": 1, "module_id": 1}):
+            email = submission.get("data", {}).get("email")
+            if email:
+                emails.append({
+                    "email": email,
+                    "name": submission.get("data", {}).get("full_name", "N/A"),
+                    "module": submission.get("module_id", "N/A")
+                })
+    
+    elif target_group == "proam":
+        query = {"status": status} if status != "all" else {}
+        async for reg in db.proam_registrations.find(query, {"contact_email": 1, "company_name": 1}):
+            if reg.get("contact_email"):
+                emails.append({
+                    "email": reg["contact_email"],
+                    "name": reg.get("company_name", "N/A"),
+                    "type": "Pro-Am Registration"
+                })
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid target_group")
+    
+    unique_emails = {e["email"]: e for e in emails}.values()
+    
+    return {
+        "target_group": target_group,
+        "status_filter": status,
+        "total_count": len(list(unique_emails)),
+        "recipients": list(unique_emails)[:50] # Return first 50 for preview
+    }
+
+# ===================== CMS - PAGES MANAGEMENT =====================
+class ContentStatus(str, Enum):
+    DRAFT = "draft"
+    REVIEW = "review"
+    PUBLISHED = "published"
+    SCHEDULED = "scheduled"
+    ARCHIVED = "archived"
+
+class PageCreate(BaseModel):
+    title: str
+    slug: str
+    content: str
+    excerpt: Optional[str] = ""
+    meta_title: Optional[str] = ""
+    meta_description: Optional[str] = ""
+    featured_image: Optional[str] = ""
+    status: str = "draft"
+    publish_at: Optional[str] = None
+    unpublish_at: Optional[str] = None
+
+@api_router.get("/webmaster/pages")
+async def get_pages(request: Request, status: Optional[str] = None):
+    """Get all CMS pages"""
+    await require_webmaster_auth(request)
+    query = {}
+    if status:
+        query["status"] = status
+    pages = await db.cms_pages.find(query, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    return pages
+
+@api_router.get("/webmaster/pages/{page_id}")
+async def get_page(request: Request, page_id: str):
+    """Get single page with revision history"""
+    await require_webmaster_auth(request)
+    page = await db.cms_pages.find_one({"page_id": page_id}, {"_id": 0})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    # Get revision history
+    revisions = await db.cms_revisions.find(
+        {"page_id": page_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(20)
+    page["revisions"] = revisions
+    return page
+
+@api_router.post("/webmaster/pages")
+async def create_page(request: Request, page: PageCreate):
+    """Create new CMS page"""
+    session = await require_webmaster_auth(request)
+    
+    # Check slug uniqueness
+    existing = await db.cms_pages.find_one({"slug": page.slug})
+    if existing:
+        raise HTTPException(status_code=400, detail="Page with this slug already exists")
+    
+    page_id = f"page_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    
+    page_doc = {
+        "page_id": page_id,
+        "title": page.title,
+        "slug": page.slug,
+        "content": page.content,
+        "excerpt": page.excerpt,
+        "meta_title": page.meta_title or page.title,
+        "meta_description": page.meta_description,
+        "featured_image": page.featured_image,
+        "status": page.status,
+        "publish_at": page.publish_at,
+        "unpublish_at": page.unpublish_at,
+        "author": session.get("username", "webmaster"),
+        "created_at": now,
+        "updated_at": now,
+        "version": 1
+    }
+    
+    await db.cms_pages.insert_one(page_doc)
+    
+    # Create initial revision
+    await db.cms_revisions.insert_one({
+        "revision_id": f"rev_{uuid.uuid4().hex[:12]}",
+        "page_id": page_id,
+        "title": page.title,
+        "content": page.content,
+        "version": 1,
+        "author": session.get("username"),
+        "created_at": now,
+        "change_summary": "Initial creation"
+    })
+    
+    return {"success": True, "page_id": page_id}
+
+@api_router.put("/webmaster/pages/{page_id}")
+async def update_page(request: Request, page_id: str, update: dict):
+    """Update CMS page and create revision"""
+    session = await require_webmaster_auth(request)
+    
+    existing = await db.cms_pages.find_one({"page_id": page_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    # Check slug uniqueness if changing
+    if "slug" in update and update["slug"] != existing.get("slug"):
+        slug_exists = await db.cms_pages.find_one({"slug": update["slug"], "page_id": {"$ne": page_id}})
+        if slug_exists:
+            raise HTTPException(status_code=400, detail="Slug already in use")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    new_version = existing.get("version", 1) + 1
+    
+    update["updated_at"] = now
+    update["version"] = new_version
+    
+    await db.cms_pages.update_one({"page_id": page_id}, {"$set": update})
+    
+    # Create revision if content changed
+    if "content" in update or "title" in update:
+        await db.cms_revisions.insert_one({
+            "revision_id": f"rev_{uuid.uuid4().hex[:12]}",
+            "page_id": page_id,
+            "title": update.get("title", existing.get("title")),
+            "content": update.get("content", existing.get("content")),
+            "version": new_version,
+            "author": session.get("username"),
+            "created_at": now,
+            "change_summary": update.get("change_summary", "Content updated")
+        })
+    
+    return {"success": True}
+
+@api_router.post("/webmaster/pages/{page_id}/submit-review")
+async def submit_page_for_review(request: Request, page_id: str):
+    """Submit page for editorial review"""
+    session = await require_webmaster_auth(request)
+    
+    page = await db.cms_pages.find_one({"page_id": page_id})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    if page.get("status") != "draft":
+        raise HTTPException(status_code=400, detail="Only draft pages can be submitted for review")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    await db.cms_pages.update_one(
+        {"page_id": page_id},
+        {"$set": {"status": "review", "submitted_at": now, "submitted_by": session.get("username")}}
+    )
+    
+    return {"success": True, "message": "Page submitted for review"}
+
+@api_router.post("/webmaster/pages/{page_id}/approve")
+async def approve_page(request: Request, page_id: str, data: dict = {}):
+    """Approve and publish page (requires editor role)"""
+    session = await require_webmaster_auth(request)
+    
+    # Check if user has approval rights
+    if session.get("role") not in ["webmaster", "editor", "admin"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions to approve")
+    
+    page = await db.cms_pages.find_one({"page_id": page_id})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    publish_at = data.get("publish_at")
+    
+    update_data = {
+        "approved_by": session.get("username"),
+        "approved_at": now,
+        "updated_at": now
+    }
+    
+    if publish_at:
+        update_data["status"] = "scheduled"
+        update_data["publish_at"] = publish_at
+    else:
+        update_data["status"] = "published"
+        update_data["published_at"] = now
+    
+    await db.cms_pages.update_one({"page_id": page_id}, {"$set": update_data})
+    
+    return {"success": True, "message": "Page approved", "status": update_data.get("status")}
+
+@api_router.post("/webmaster/pages/{page_id}/reject")
+async def reject_page(request: Request, page_id: str, data: dict):
+    """Reject page and send back to draft"""
+    session = await require_webmaster_auth(request)
+    
+    page = await db.cms_pages.find_one({"page_id": page_id})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    await db.cms_pages.update_one(
+        {"page_id": page_id},
+        {"$set": {
+            "status": "draft",
+            "rejection_reason": data.get("reason", ""),
+            "rejected_by": session.get("username"),
+            "rejected_at": now
+        }}
+    )
+    
+    return {"success": True, "message": "Page sent back to draft"}
+
+@api_router.post("/webmaster/pages/{page_id}/unpublish")
+async def unpublish_page(request: Request, page_id: str):
+    """Unpublish a page"""
+    await require_webmaster_auth(request)
+    
+    now = datetime.now(timezone.utc).isoformat()
+    await db.cms_pages.update_one(
+        {"page_id": page_id},
+        {"$set": {"status": "draft", "unpublished_at": now}}
+    )
+    
+    return {"success": True, "message": "Page unpublished"}
+
+@api_router.post("/webmaster/pages/{page_id}/restore/{revision_id}")
+async def restore_revision(request: Request, page_id: str, revision_id: str):
+    """Restore page to a previous revision"""
+    session = await require_webmaster_auth(request)
+    
+    revision = await db.cms_revisions.find_one({"revision_id": revision_id, "page_id": page_id})
+    if not revision:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    
+    page = await db.cms_pages.find_one({"page_id": page_id})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    new_version = page.get("version", 1) + 1
+    
+    await db.cms_pages.update_one(
+        {"page_id": page_id},
+        {"$set": {
+            "title": revision.get("title"),
+            "content": revision.get("content"),
+            "version": new_version,
+            "status": "draft"
+        }}
+    )
+    
+    # Create new revision for the restore
+    await db.cms_revisions.insert_one({
+        "revision_id": f"rev_{uuid.uuid4().hex[:12]}",
+        "page_id": page_id,
+        "title": revision.get("title"),
+        "content": revision.get("content"),
+        "version": new_version,
+        "author": session.get("username"),
+        "created_at": now,
+        "change_summary": f"Restored from version {revision.get('version')}"
+    })
+    
+    return {"success": True, "message": f"Restored to version {revision.get('version')}"}
+
+@api_router.delete("/webmaster/pages/{page_id}")
+async def delete_page(request: Request, page_id: str):
+    """Delete a CMS page"""
+    await require_webmaster_auth(request)
+    
+    result = await db.cms_pages.delete_one({"page_id": page_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Page not found")
+    
+    # Also delete revisions
+    await db.cms_revisions.delete_many({"page_id": page_id})
+    
+    return {"success": True, "message": "Page deleted"}
+
+# ===================== CMS - MEDIA LIBRARY =====================
+@api_router.get("/webmaster/media")
+async def get_media_library(request: Request, media_type: Optional[str] = None, search: Optional[str] = None):
+    """Get media library items"""
+    await require_webmaster_auth(request)
+    
+    query = {}
+    if media_type:
+        query["type"] = media_type
+    if search:
+        query["$or"] = [
+            {"filename": {"$regex": search, "$options": "i"}},
+            {"alt_text": {"$regex": search, "$options": "i"}},
+            {"tags": {"$regex": search, "$options": "i"}}
+        ]
+    
+    # Exclude file_data from listing to keep response small
+    media = await db.media_library.find(query, {"_id": 0, "file_data": 0}).sort("uploaded_at", -1).to_list(200)
+    return media
+
+@api_router.post("/webmaster/media")
+async def upload_media(request: Request, file: UploadFile = File(...), alt_text: str = "", tags: str = ""):
+    """Upload media to library"""
+    session = await require_webmaster_auth(request)
+    
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File type not allowed")
+    
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024: # 10MB limit
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    
+    # Generate unique filename
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    media_id = f"media_{uuid.uuid4().hex[:12]}"
+    filename = f"{media_id}.{ext}"
+    
+    # Save file locally (for preview environment)
+    upload_dir = Path("./uploads/media")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filepath = upload_dir / filename
+    
+    async with aiofiles.open(filepath, "wb") as f:
+        await f.write(contents)
+    
+    # Determine type
+    media_type = "image" if file.content_type.startswith("image") else "video" if file.content_type.startswith("video") else "document"
+    
+    # Store file data as base64 in MongoDB for production persistence
+    # Only store images up to 5MB in database to avoid bloat
+    file_data_b64 = None
+    if len(contents) <= 5 * 1024 * 1024 and media_type == "image":
+        file_data_b64 = base64.b64encode(contents).decode('utf-8')
+    
+    now = datetime.now(timezone.utc).isoformat()
+    media_doc = {
+        "media_id": media_id,
+        "filename": file.filename,
+        "stored_filename": filename,
+        "url": f"/api/uploads/media/{filename}",
+        "type": media_type,
+        "mime_type": file.content_type,
+        "size": len(contents),
+        "alt_text": alt_text,
+        "tags": [t.strip() for t in tags.split(",") if t.strip()],
+        "uploaded_by": session.get("username"),
+        "uploaded_at": now,
+        "file_data": file_data_b64 # Store base64 for persistence in production
+    }
+    
+    await db.media_library.insert_one(media_doc)
+    
+    return {"success": True, "media_id": media_id, "url": media_doc["url"]}
+
+@api_router.put("/webmaster/media/{media_id}")
+async def update_media(request: Request, media_id: str, update: dict):
+    """Update media metadata"""
+    await require_webmaster_auth(request)
+    
+    allowed_fields = ["alt_text", "tags"]
+    safe_update = {k: v for k, v in update.items() if k in allowed_fields}
+    
+    if "tags" in safe_update and isinstance(safe_update["tags"], str):
+        safe_update["tags"] = [t.strip() for t in safe_update["tags"].split(",") if t.strip()]
+    
+    await db.media_library.update_one({"media_id": media_id}, {"$set": safe_update})
+    return {"success": True}
+
+@api_router.delete("/webmaster/media/{media_id}")
+async def delete_media(request: Request, media_id: str):
+    """Delete media from library"""
+    await require_webmaster_auth(request)
+    
+    media = await db.media_library.find_one({"media_id": media_id})
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    
+    # Delete file
+    filepath = Path(f"./uploads/media/{media.get('stored_filename')}")
+    if filepath.exists():
+        filepath.unlink()
+    
+    await db.media_library.delete_one({"media_id": media_id})
+    return {"success": True}
+
+# ===================== CMS - PUBLIC PAGE ACCESS =====================
+@api_router.get("/pages/{slug}")
+async def get_public_page(slug: str):
+    """Get published page by slug (public)"""
+    page = await db.cms_pages.find_one(
+        {"slug": slug, "status": "published"},
+        {"_id": 0}
+    )
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return page
+
+@api_router.get("/cms/pages/list")
+async def list_public_pages():
+    """List all published pages (for navigation)"""
+    pages = await db.cms_pages.find(
+        {"status": "published"},
+        {"_id": 0, "title": 1, "slug": 1, "excerpt": 1, "meta_title": 1}
+    ).to_list(50)
+    return pages
+
+# ===================== CMS - DASHBOARD STATS =====================
+@api_router.get("/webmaster/cms-stats")
+async def get_cms_stats(request: Request):
+    """Get CMS statistics for dashboard"""
+    await require_webmaster_auth(request)
+    
+    stats = {
+        "pages": {
+            "total": await db.cms_pages.count_documents({}),
+            "published": await db.cms_pages.count_documents({"status": "published"}),
+            "draft": await db.cms_pages.count_documents({"status": "draft"}),
+            "review": await db.cms_pages.count_documents({"status": "review"}),
+            "scheduled": await db.cms_pages.count_documents({"status": "scheduled"})
+        },
+        "news": {
+            "total": await db.news_articles.count_documents({}),
+            "published": await db.news_articles.count_documents({"status": "published"}),
+            "draft": await db.news_articles.count_documents({"status": "draft"}),
+            "review": await db.news_articles.count_documents({"status": "review"})
+        },
+        "media": {
+            "total": await db.media_library.count_documents({}),
+            "images": await db.media_library.count_documents({"type": "image"}),
+            "videos": await db.media_library.count_documents({"type": "video"}),
+            "documents": await db.media_library.count_documents({"type": "document"})
+        }
+    }
+    
+    return stats
+
+# ===================== HALL OF FAME MANAGEMENT =====================
+@api_router.get("/webmaster/hall-of-fame/champions")
+async def get_hof_champions(request: Request):
+    """Get all Hall of Fame champions"""
+    await require_webmaster_auth(request)
+    champions = await db.hof_champions.find({}, {"_id": 0}).sort("year", -1).to_list(100)
+    return champions
+
+@api_router.post("/webmaster/hall-of-fame/champions")
+async def create_hof_champion(request: Request, data: dict):
+    """Create a new champion entry"""
+    await require_webmaster_auth(request)
+    
+    champion_id = f"champ_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    
+    champion = {
+        "champion_id": champion_id,
+        "year": data.get("year"),
+        "winner": data.get("winner"),
+        "country": data.get("country"),
+        "country_code": data.get("country_code", ""),
+        "score": data.get("score", ""),
+        "venue": data.get("venue", "Karen Country Club"),
+        "runner_up": data.get("runner_up", ""),
+        "purse": data.get("purse", ""),
+        "image": data.get("image", ""),
+        "created_at": now,
+        "updated_at": now
+    }
+    
+    await db.hof_champions.insert_one(champion)
+    return {"success": True, "champion_id": champion_id}
+
+@api_router.put("/webmaster/hall-of-fame/champions/{champion_id}")
+async def update_hof_champion(request: Request, champion_id: str, data: dict):
+    """Update a champion entry"""
+    await require_webmaster_auth(request)
+    
+    allowed = ["year", "winner", "country", "country_code", "score", "venue", "runner_up", "purse", "image"]
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.hof_champions.update_one({"champion_id": champion_id}, {"$set": update})
+    return {"success": True}
+
+@api_router.delete("/webmaster/hall-of-fame/champions/{champion_id}")
+async def delete_hof_champion(request: Request, champion_id: str):
+    """Delete a champion entry"""
+    await require_webmaster_auth(request)
+    await db.hof_champions.delete_one({"champion_id": champion_id})
+    return {"success": True}
+
+@api_router.get("/webmaster/hall-of-fame/inductees")
+async def get_hof_inductees(request: Request):
+    """Get all Hall of Fame inductees"""
+    await require_webmaster_auth(request)
+    inductees = await db.hof_inductees.find({}, {"_id": 0}).sort([("year", -1), ("name", 1)]).to_list(100)
+    return inductees
+
+@api_router.post("/webmaster/hall-of-fame/inductees")
+async def create_hof_inductee(request: Request, data: dict):
+    """Create a new inductee entry"""
+    await require_webmaster_auth(request)
+    
+    inductee_id = f"ind_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    
+    inductee = {
+        "inductee_id": inductee_id,
+        "name": data.get("name"),
+        "category": data.get("category"),
+        "year": data.get("year"),
+        "achievement": data.get("achievement", ""),
+        "image": data.get("image", ""),
+        "created_at": now,
+        "updated_at": now
+    }
+    
+    await db.hof_inductees.insert_one(inductee)
+    return {"success": True, "inductee_id": inductee_id}
+
+@api_router.put("/webmaster/hall-of-fame/inductees/{inductee_id}")
+async def update_hof_inductee(request: Request, inductee_id: str, data: dict):
+    """Update an inductee entry"""
+    await require_webmaster_auth(request)
+    
+    allowed = ["name", "category", "year", "achievement", "image"]
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.hof_inductees.update_one({"inductee_id": inductee_id}, {"$set": update})
+    return {"success": True}
+
+@api_router.delete("/webmaster/hall-of-fame/inductees/{inductee_id}")
+async def delete_hof_inductee(request: Request, inductee_id: str):
+    """Delete an inductee entry"""
+    await require_webmaster_auth(request)
+    await db.hof_inductees.delete_one({"inductee_id": inductee_id})
+    return {"success": True}
+
+# Public API for Hall of Fame
+@api_router.get("/hall-of-fame")
+async def get_public_hall_of_fame():
+    """Get public Hall of Fame data (only entries with images)"""
+    champions = await db.hof_champions.find(
+        {"image": {"$ne": "", "$exists": True}},
+        {"_id": 0}
+    ).sort("year", -1).to_list(100)
+    
+    inductees = await db.hof_inductees.find(
+        {"image": {"$ne": "", "$exists": True}},
+        {"_id": 0}
+    ).sort([("year", -1), ("name", 1)]).to_list(100)
+    
+    return {"champions": champions, "inductees": inductees}
+
+# ===================== SITE CONFIGURATION (CMS-Driven) =====================
+@api_router.get("/site-config")
+async def get_site_config():
+    """Get all site configuration for frontend - NO REDEPLOY NEEDED"""
+    config = await db.site_config.find_one({"config_id": "main"}, {"_id": 0})
+    if not config:
+        # Return defaults if no config exists
+        config = {
+            "hero_images": [],
+            "featured_content": [],
+            "partner_logos": {
+                "main_partner": {"name": "", "logo_url": "", "alt": ""},
+                "official_partners": [],
+                "tournament_sponsors": []
+            },
+            "ctas": {
+                "primary": {"text": "Get Tickets", "url": "/tickets"},
+                "secondary": {"text": "Volunteer", "url": "/volunteer"}
+            },
+            "social_links": {},
+            "contact_info": {}
+        }
+    return config
+
+@api_router.get("/webmaster/site-config")
+async def get_webmaster_site_config(request: Request):
+    """Get site configuration for editing"""
+    await require_webmaster_auth(request)
+    config = await db.site_config.find_one({"config_id": "main"}, {"_id": 0})
+    return config or {}
+
+@api_router.put("/webmaster/site-config")
+async def update_site_config(request: Request, data: dict):
+    """Update site configuration - changes reflect immediately without redeploy"""
+    await require_webmaster_auth(request)
+    
+    data["config_id"] = "main"
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.site_config.update_one(
+        {"config_id": "main"},
+        {"$set": data},
+        upsert=True
+    )
+    return {"success": True}
+
+# Full Hall of Fame data (for CMS to fully manage champions/inductees)
+@api_router.get("/hall-of-fame/full")
+async def get_full_hall_of_fame():
+    """Get ALL Hall of Fame data including entries without images"""
+    champions = await db.hof_champions.find({}, {"_id": 0}).sort("year", -1).to_list(100)
+    inductees = await db.hof_inductees.find({}, {"_id": 0}).sort([("year", -1), ("name", 1)]).to_list(100)
+    return {"champions": champions, "inductees": inductees}
+
+# ===================== CMS - CONTENT TEMPLATES =====================
+TEMPLATE_CATEGORIES = [
+    {"id": "header", "name": "Header Sections", "icon": "layout"},
+    {"id": "content", "name": "Content Blocks", "icon": "file-text"},
+    {"id": "faq", "name": "FAQ Sections", "icon": "help-circle"},
+    {"id": "cta", "name": "Call to Action", "icon": "mouse-pointer"},
+    {"id": "gallery", "name": "Image Galleries", "icon": "image"},
+    {"id": "contact", "name": "Contact Forms", "icon": "mail"},
+    {"id": "team", "name": "Team/Staff", "icon": "users"},
+    {"id": "testimonial", "name": "Testimonials", "icon": "quote"},
+    {"id": "pricing", "name": "Pricing Tables", "icon": "dollar-sign"},
+    {"id": "footer", "name": "Footer Sections", "icon": "layout"}
+]
+
+@api_router.get("/webmaster/templates/categories")
+async def get_template_categories(request: Request):
+    """Get available template categories"""
+    await require_webmaster_auth(request)
+    return {"categories": TEMPLATE_CATEGORIES}
+
+@api_router.get("/webmaster/templates")
+async def get_content_templates(request: Request, category: Optional[str] = None):
+    """Get all content templates"""
+    await require_webmaster_auth(request)
+    
+    query = {}
+    if category:
+        query["category"] = category
+    
+    templates = await db.content_templates.find(query, {"_id": 0}).sort("name", 1).to_list(200)
+    
+    # If no templates exist, seed with defaults
+    if not templates:
+        await seed_default_templates()
+        templates = await db.content_templates.find(query, {"_id": 0}).sort("name", 1).to_list(200)
+    
+    return templates
+
+@api_router.get("/webmaster/templates/{template_id}")
+async def get_template(request: Request, template_id: str):
+    """Get single template"""
+    await require_webmaster_auth(request)
+    template = await db.content_templates.find_one({"template_id": template_id}, {"_id": 0})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
+
+@api_router.post("/webmaster/templates")
+async def create_template(request: Request, data: dict):
+    """Create new content template"""
+    session = await require_webmaster_auth(request)
+    
+    template_id = f"tpl_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    
+    template = {
+        "template_id": template_id,
+        "name": data.get("name", "Untitled Template"),
+        "description": data.get("description", ""),
+        "category": data.get("category", "content"),
+        "content": data.get("content", ""),
+        "thumbnail": data.get("thumbnail", ""),
+        "is_system": False,
+        "created_by": session.get("username"),
+        "created_at": now,
+        "updated_at": now,
+        "usage_count": 0
+    }
+    
+    await db.content_templates.insert_one(template)
+    return {"success": True, "template_id": template_id}
+
+@api_router.put("/webmaster/templates/{template_id}")
+async def update_template(request: Request, template_id: str, data: dict):
+    """Update content template"""
+    await require_webmaster_auth(request)
+    
+    template = await db.content_templates.find_one({"template_id": template_id})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    if template.get("is_system"):
+        raise HTTPException(status_code=403, detail="Cannot modify system templates")
+    
+    allowed = ["name", "description", "category", "content", "thumbnail"]
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.content_templates.update_one({"template_id": template_id}, {"$set": update})
+    return {"success": True}
+
+@api_router.delete("/webmaster/templates/{template_id}")
+async def delete_template(request: Request, template_id: str):
+    """Delete content template"""
+    await require_webmaster_auth(request)
+    
+    template = await db.content_templates.find_one({"template_id": template_id})
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    if template.get("is_system"):
+        raise HTTPException(status_code=403, detail="Cannot delete system templates")
+    
+    await db.content_templates.delete_one({"template_id": template_id})
+    return {"success": True}
+
+@api_router.post("/webmaster/templates/{template_id}/use")
+async def use_template(request: Request, template_id: str):
+    """Increment template usage count"""
+    await require_webmaster_auth(request)
+    await db.content_templates.update_one(
+        {"template_id": template_id},
+        {"$inc": {"usage_count": 1}}
+    )
+    return {"success": True}
+
+async def seed_default_templates():
+    """Seed default content templates"""
+    default_templates = [
+        {
+            "template_id": "tpl_hero_centered",
+            "name": "Centered Hero Section",
+            "description": "A centered hero section with title, subtitle, and call-to-action button",
+            "category": "header",
+            "is_system": True,
+            "content": """<div style="text-align: center; padding: 60px 20px; background: linear-gradient(135deg, #1a1a1a 0%, #333 100%); color: white; border-radius: 8px;">
+  <h1 style="font-size: 3rem; margin-bottom: 1rem;">Your Page Title</h1>
+  <p style="font-size: 1.25rem; opacity: 0.9; max-width: 600px; margin: 0 auto 2rem;">Add your compelling subtitle or description here to engage visitors.</p>
+  <a href="#" style="display: inline-block; background: #D50032; color: white; padding: 12px 32px; border-radius: 4px; text-decoration: none; font-weight: 600;">Get Started</a>
+</div>"""
+        },
+        {
+            "template_id": "tpl_faq_accordion",
+            "name": "FAQ Accordion Section",
+            "description": "Expandable FAQ section with questions and answers",
+            "category": "faq",
+            "is_system": True,
+            "content": """<div style="max-width: 800px; margin: 0 auto;">
+  <h2 style="text-align: center; margin-bottom: 2rem;">Frequently Asked Questions</h2>
+  
+  <div style="border: 1px solid #e5e5e5; border-radius: 8px; margin-bottom: 1rem;">
+    <div style="padding: 1rem; font-weight: 600; cursor: pointer; background: #f9f9f9;">Q: What is the Magical Kenya Open?</div>
+    <div style="padding: 1rem; border-top: 1px solid #e5e5e5;">A: The Magical Kenya Open is a professional golf tournament on the DP World Tour, held annually at Karen Country Club in Nairobi, Kenya.</div>
+  </div>
+  
+  <div style="border: 1px solid #e5e5e5; border-radius: 8px; margin-bottom: 1rem;">
+    <div style="padding: 1rem; font-weight: 600; cursor: pointer; background: #f9f9f9;">Q: How can I buy tickets?</div>
+    <div style="padding: 1rem; border-top: 1px solid #e5e5e5;">A: Tickets can be purchased through our official ticketing partner. Visit the Tickets page for more information.</div>
+  </div>
+  
+  <div style="border: 1px solid #e5e5e5; border-radius: 8px; margin-bottom: 1rem;">
+    <div style="padding: 1rem; font-weight: 600; cursor: pointer; background: #f9f9f9;">Q: Can I volunteer at the tournament?</div>
+    <div style="padding: 1rem; border-top: 1px solid #e5e5e5;">A: Yes! We welcome volunteers for various roles including marshaling and scoring. Register through our volunteer registration page.</div>
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_cta_banner",
+            "name": "Call to Action Banner",
+            "description": "Eye-catching banner with action button",
+            "category": "cta",
+            "is_system": True,
+            "content": """<div style="background: #D50032; color: white; padding: 40px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+  <div>
+    <h3 style="font-size: 1.5rem; margin: 0 0 0.5rem 0;">Ready to Join Us?</h3>
+    <p style="margin: 0; opacity: 0.9;">Don't miss the biggest golf event in East Africa!</p>
+  </div>
+  <a href="#" style="background: white; color: #D50032; padding: 12px 32px; border-radius: 4px; text-decoration: none; font-weight: 600;">Register Now</a>
+</div>"""
+        },
+        {
+            "template_id": "tpl_two_column",
+            "name": "Two Column Layout",
+            "description": "Content in two columns with image and text",
+            "category": "content",
+            "is_system": True,
+            "content": """<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center;">
+  <div>
+    <img src="https://placehold.co/600x400/1a1a1a/white?text=Your+Image" alt="Description" style="width: 100%; border-radius: 8px;" />
+  </div>
+  <div>
+    <h2>Section Title</h2>
+    <p>Add your content here. This two-column layout is perfect for showcasing features, services, or any content that benefits from visual accompaniment.</p>
+    <ul>
+      <li>Key point one</li>
+      <li>Key point two</li>
+      <li>Key point three</li>
+    </ul>
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_team_grid",
+            "name": "Team Members Grid",
+            "description": "Grid layout for displaying team or staff members",
+            "category": "team",
+            "is_system": True,
+            "content": """<div style="text-align: center; margin-bottom: 2rem;">
+  <h2>Our Team</h2>
+  <p style="color: #666;">Meet the people behind the tournament</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px;">
+  <div style="text-align: center;">
+    <img src="https://placehold.co/200x200/1a1a1a/white?text=Photo" alt="Team member" style="width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 1rem;" />
+    <h4 style="margin: 0 0 0.25rem 0;">John Doe</h4>
+    <p style="color: #666; margin: 0;">Tournament Director</p>
+  </div>
+  <div style="text-align: center;">
+    <img src="https://placehold.co/200x200/1a1a1a/white?text=Photo" alt="Team member" style="width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 1rem;" />
+    <h4 style="margin: 0 0 0.25rem 0;">Jane Smith</h4>
+    <p style="color: #666; margin: 0;">Operations Manager</p>
+  </div>
+  <div style="text-align: center;">
+    <img src="https://placehold.co/200x200/1a1a1a/white?text=Photo" alt="Team member" style="width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 1rem;" />
+    <h4 style="margin: 0 0 0.25rem 0;">Mike Johnson</h4>
+    <p style="color: #666; margin: 0;">Marketing Lead</p>
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_contact_info",
+            "name": "Contact Information Block",
+            "description": "Contact details with icons",
+            "category": "contact",
+            "is_system": True,
+            "content": """<div style="background: #f9f9f9; padding: 40px; border-radius: 8px;">
+  <h2 style="text-align: center; margin-bottom: 2rem;">Get in Touch</h2>
+  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; text-align: center;">
+    <div>
+      <div style="font-size: 2rem; margin-bottom: 0.5rem;">📍</div>
+      <h4>Address</h4>
+      <p style="color: #666;">Karen Country Club<br/>Nairobi, Kenya</p>
+    </div>
+    <div>
+      <div style="font-size: 2rem; margin-bottom: 0.5rem;">📧</div>
+      <h4>Email</h4>
+      <p style="color: #666;">info@kenyaopen.com</p>
+    </div>
+    <div>
+      <div style="font-size: 2rem; margin-bottom: 0.5rem;">📞</div>
+      <h4>Phone</h4>
+      <p style="color: #666;">+254 20 123 4567</p>
+    </div>
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_testimonial",
+            "name": "Testimonial Quote",
+            "description": "Single testimonial with quote styling",
+            "category": "testimonial",
+            "is_system": True,
+            "content": """<div style="background: linear-gradient(135deg, #f9f9f9 0%, #fff 100%); padding: 40px; border-radius: 8px; text-align: center; border-left: 4px solid #D50032;">
+  <div style="font-size: 3rem; color: #D50032; line-height: 1;">"</div>
+  <blockquote style="font-size: 1.25rem; font-style: italic; color: #333; max-width: 700px; margin: 0 auto 1.5rem;">
+    The Magical Kenya Open is not just a tournament, it's an experience that showcases the best of Kenyan hospitality and world-class golf.
+  </blockquote>
+  <div style="font-weight: 600;">— Guest Name</div>
+  <div style="color: #666; font-size: 0.9rem;">Title / Organization</div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_stats_row",
+            "name": "Statistics Row",
+            "description": "Display key statistics in a row",
+            "category": "content",
+            "is_system": True,
+            "content": """<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; text-align: center; padding: 40px 0;">
+  <div>
+    <div style="font-size: 3rem; font-weight: 700; color: #D50032;">$2.7M</div>
+    <div style="color: #666;">Prize Fund</div>
+  </div>
+  <div>
+    <div style="font-size: 3rem; font-weight: 700; color: #D50032;">156</div>
+    <div style="color: #666;">Players</div>
+  </div>
+  <div>
+    <div style="font-size: 3rem; font-weight: 700; color: #D50032;">4</div>
+    <div style="color: #666;">Days</div>
+  </div>
+  <div>
+    <div style="font-size: 3rem; font-weight: 700; color: #D50032;">50K+</div>
+    <div style="color: #666;">Spectators</div>
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_image_gallery",
+            "name": "Image Gallery Grid",
+            "description": "Simple 3-column image gallery",
+            "category": "gallery",
+            "is_system": True,
+            "content": """<div style="margin: 2rem 0;">
+  <h2 style="text-align: center; margin-bottom: 1.5rem;">Photo Gallery</h2>
+  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+1" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+2" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+3" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+4" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+5" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+    <img src="https://placehold.co/400x300/1a1a1a/white?text=Image+6" alt="Gallery image" style="width: 100%; border-radius: 8px;" />
+  </div>
+</div>"""
+        },
+        {
+            "template_id": "tpl_pricing_table",
+            "name": "Pricing/Ticket Table",
+            "description": "Display pricing options in cards",
+            "category": "pricing",
+            "is_system": True,
+            "content": """<div style="text-align: center; margin-bottom: 2rem;">
+  <h2>Ticket Options</h2>
+  <p style="color: #666;">Choose the best option for you</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;">
+  <div style="border: 1px solid #e5e5e5; border-radius: 8px; padding: 30px; text-align: center;">
+    <h3>Daily Pass</h3>
+    <div style="font-size: 2.5rem; font-weight: 700; color: #D50032; margin: 1rem 0;">KES 500</div>
+    <ul style="list-style: none; padding: 0; margin: 1.5rem 0;">
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">Single day access</li>
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">General admission</li>
+      <li style="padding: 0.5rem 0;">Food court access</li>
+    </ul>
+    <a href="#" style="display: block; background: #D50032; color: white; padding: 12px; border-radius: 4px; text-decoration: none;">Buy Now</a>
+  </div>
+  <div style="border: 2px solid #D50032; border-radius: 8px; padding: 30px; text-align: center; position: relative;">
+    <div style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: #D50032; color: white; padding: 4px 16px; border-radius: 20px; font-size: 0.8rem;">BEST VALUE</div>
+    <h3>Season Pass</h3>
+    <div style="font-size: 2.5rem; font-weight: 700; color: #D50032; margin: 1rem 0;">KES 1,500</div>
+    <ul style="list-style: none; padding: 0; margin: 1.5rem 0;">
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">All 4 days access</li>
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">Priority entry</li>
+      <li style="padding: 0.5rem 0;">Souvenir included</li>
+    </ul>
+    <a href="#" style="display: block; background: #D50032; color: white; padding: 12px; border-radius: 4px; text-decoration: none;">Buy Now</a>
+  </div>
+  <div style="border: 1px solid #e5e5e5; border-radius: 8px; padding: 30px; text-align: center;">
+    <h3>VIP Pass</h3>
+    <div style="font-size: 2.5rem; font-weight: 700; color: #D50032; margin: 1rem 0;">KES 5,000</div>
+    <ul style="list-style: none; padding: 0; margin: 1.5rem 0;">
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">All 4 days access</li>
+      <li style="padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0;">VIP hospitality tent</li>
+      <li style="padding: 0.5rem 0;">Exclusive parking</li>
+    </ul>
+    <a href="#" style="display: block; background: #D50032; color: white; padding: 12px; border-radius: 4px; text-decoration: none;">Buy Now</a>
+  </div>
+</div>"""
+        }
+    ]
+    
+    now = datetime.now(timezone.utc).isoformat()
+    for tpl in default_templates:
+        tpl["created_at"] = now
+        tpl["updated_at"] = now
+        tpl["usage_count"] = 0
+        tpl["created_by"] = "system"
+        existing = await db.content_templates.find_one({"template_id": tpl["template_id"]})
+        if not existing:
+            await db.content_templates.insert_one(tpl)
+
+
+@api_router.get("/pro-am/tee-times/public")
+async def get_public_proam_tee_times():
+    """Get Pro-Am tee times for public display"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else "mko-2026"
+    
+    tee_times = await db.proam_tee_times.find(
+        {"tournament_id": tournament_id},
+        {"_id": 0}
+    ).sort([("tee_number", 1), ("tee_time", 1)]).to_list(100)
+    
+    return {
+        "tournament_id": tournament_id,
+        "tee_times": tee_times,
+        "total_count": len(tee_times)
+    }
+
+
+
+@api_router.get("/accreditation/stats/public")
+async def get_public_accreditation_stats():
+    """Get public accreditation statistics"""
+    current = await db.tournaments.find_one({"is_current": True}, {"_id": 0})
+    tournament_id = current["tournament_id"] if current else "mko-2026"
+    
+    # Get module counts
+    modules = await db.accreditation_modules.find({"tournament_id": tournament_id, "is_active": True}, {"_id": 0}).to_list(100)
+    
+    stats = {
+        "tournament_id": tournament_id,
+        "modules_count": len(modules),
+        "modules": [{"name": m["name"], "type": m["module_type"], "is_public": m["is_public"]} for m in modules]
+    }
+    
+    return stats
+
 
 # ===================== HEALTH CHECK =====================
 @api_router.get("/")
@@ -2960,14 +6215,30 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
+# Root-level health check for Kubernetes (without /api prefix)
+@app.get("/health")
+async def kubernetes_health_check():
+    """Health check endpoint for Kubernetes probes"""
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
 # Include router
 app.include_router(api_router)
 
-# CORS
+# CORS - Handle credentials properly
+cors_origins_env = os.environ.get('CORS_ORIGINS', '')
+if cors_origins_env == '*' or cors_origins_env == '':
+    # When using wildcard or empty, we need to handle CORS dynamically
+    # to support credentials (cookies)
+    cors_origins = ["*"]
+    cors_allow_credentials = False  # Cannot use credentials with wildcard
+else:
+    cors_origins = [origin.strip() for origin in cors_origins_env.split(',') if origin.strip()]
+    cors_allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=cors_allow_credentials,
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

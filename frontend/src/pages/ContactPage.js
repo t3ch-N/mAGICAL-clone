@@ -271,12 +271,12 @@ export default function ContactPage() {
             <div className="aspect-[16/6] bg-primary/10 flex items-center justify-center">
               <div className="text-center p-8">
                 <MapPin className="w-12 h-12 text-primary mx-auto mb-4" />
-                <h3 className="font-heading text-xl font-bold mb-2">Muthaiga Golf Club</h3>
+                <h3 className="font-heading text-xl font-bold mb-2">Karen Country Club</h3>
                 <p className="text-muted-foreground font-body">
-                  Muthaiga Road, Nairobi, Kenya
+                  Karen Road, Nairobi, Kenya
                 </p>
                 <a 
-                  href="https://maps.google.com/?q=Muthaiga+Golf+Club+Nairobi"
+                  href="https://maps.google.com/?q=Karen+Country+Club+Nairobi"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-block mt-4"

@@ -137,7 +137,7 @@ export default function TravelPage() {
                 <MapPin className="w-10 h-10 text-secondary mx-auto mb-4" />
                 <h3 className="font-heading text-xl font-bold mb-2">Tournament Venue</h3>
                 <p className="text-muted-foreground font-body text-sm">
-                  Muthaiga Golf Club is located just 15 minutes from the city center and 45 minutes from the airport.
+                  Karen Country Club is located just 20 minutes from the city center and 30 minutes from Jomo Kenyatta International Airport.
                 </p>
               </CardContent>
             </Card>

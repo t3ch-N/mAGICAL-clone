@@ -20,6 +20,15 @@ import VolunteerRegisterPage from "./pages/VolunteerRegisterPage";
 import MarshalLoginPage from "./pages/MarshalLoginPage";
 import MarshalDashboardPage from "./pages/MarshalDashboardPage";
 import OperationsDashboardPage from "./pages/OperationsDashboardPage";
+import PublicApplicationPage from "./pages/PublicApplicationPage";
+import ApplyPage from "./pages/ApplyPage";
+import ProAmPage from "./pages/ProAmPage";
+import ProAmRegisterPage from "./pages/ProAmRegisterPage";
+import WebmasterLoginPage from "./pages/WebmasterLoginPage";
+import WebmasterDashboard from "./pages/WebmasterDashboard";
+import SuperAdminDashboard from "./pages/SuperAdminDashboard";
+import HallOfFamePage from "./pages/HallOfFamePage";
+import CMSPage from "./pages/CMSPage";
 
 // Components
 import MainLayout from "./components/MainLayout";
@@ -50,6 +59,21 @@ function AppRouter() {
       <Route path="/marshal-dashboard" element={<MarshalDashboardPage />} />
       <Route path="/operations-dashboard" element={<OperationsDashboardPage />} />
       
+      {/* Public Application Pages */}
+      <Route path="/apply/:moduleSlug" element={<PublicApplicationPage />} />
+      <Route path="/apply" element={<ApplyPage />} />
+      
+      {/* Pro-Am Pages */}
+      <Route path="/pro-am" element={<ProAmPage />} />
+      <Route path="/pro-am/register" element={<ProAmRegisterPage />} />
+      
+      {/* Webmaster Portal */}
+      <Route path="/webmaster-login" element={<WebmasterLoginPage />} />
+      <Route path="/webmaster-dashboard" element={<WebmasterDashboard />} />
+      
+      {/* Super Admin Dashboard (CIO Only) */}
+      <Route path="/super-admin-dashboard" element={<SuperAdminDashboard />} />
+      
       {/* Main Site Routes */}
       <Route element={<MainLayout />}>
         <Route path="/" element={<HomePage />} />
@@ -66,6 +90,8 @@ function AppRouter() {
         <Route path="/gallery" element={<GalleryPage />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/about-kogl" element={<AboutKOGLPage />} />
+        <Route path="/hall-of-fame" element={<HallOfFamePage />} />
+        <Route path="/page/:slug" element={<CMSPage />} />
         <Route path="/contact" element={<ContactPage />} />
         <Route 
           path="/admin/*" 

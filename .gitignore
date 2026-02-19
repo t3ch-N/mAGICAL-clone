@@ -18,6 +18,7 @@ node_modules/
 
 # Testing
 /coverage
+test_reports/
 
 # Next.js
 /.next/
@@ -28,12 +29,24 @@ next-env.d.ts
 # Production builds
 /build
 dist/
-dist
 
-# Environment files (comprehensive coverage)
+# Environment files - CRITICAL: Never commit these!
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.env
+*.env.*
+!.env.example
+backend/.env
+frontend/.env
 
+# Credentials and tokens
 *token.json*
 *credentials.json*
+*.pem
+*.key
 
 # Logs and debug files
 npm-debug.log*
@@ -41,16 +54,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dump.rdb
+*.log
 
 # System files
 .DS_Store
-*.pem
+Thumbs.db
 
 # Python
 __pycache__/
-*pyc*
+*.py[cod]
+*$py.class
+*.so
 venv/
 .venv/
+env/
+ENV/
+.Python
 
 # Development tools
 chainlit.md
@@ -63,22 +82,25 @@ chainlit.md
 
 # Data and databases
 agenthub/agents/youtube/db
+*.db
+*.sqlite
+*.sqlite3
 
 # Archive files and large assets
 **/*.zip
 **/*.tar.gz
 **/*.tar
 **/*.tgz
-*.pack
 *.deb
 *.dylib
 
 # Build caches
 .cache/
+*.pack
 
-# Mobile development
-android-sdk/ frontend/node_modules/.cache/default-development/0.pack
-frontend/node_modules/.cache/default-development/0.pack
+# Uploads (if you want to exclude uploaded files)
+backend/uploads/
+backend/policies/
 -e 
 # Environment files
 *.env
@@ -91,3 +113,12 @@ frontend/node_modules/.cache/default-development/0.pack
 # Environment files
 *.env
 *.env.*
+-e 
+# Environment files
+*.env
+*.env.*
+-e 
+# Environment files
+*.env
+*.env.*
+frontend/node_modules/.cache/default-development/11.pack

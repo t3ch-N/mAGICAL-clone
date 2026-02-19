@@ -55,8 +55,11 @@ import {
   ToggleRight,
   Layers,
   Key,
-  History
+  History,
+  ClipboardCheck
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import ProAmManagement from '../components/ProAmManagement';
 
 const KOGL_LOGO = "https://customer-assets.emergentagent.com/job_magical-kenya-golf/artifacts/ft1exgdt_KOGL.png";
 
@@ -127,6 +130,8 @@ export default function OperationsDashboardPage() {
   const [selectedModule, setSelectedModule] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedSubmissions, setSelectedSubmissions] = useState([]);
+  const [reviewerNotes, setReviewerNotes] = useState('');
   
   // Modal states
   const [showLocationModal, setShowLocationModal] = useState(false);
@@ -144,6 +149,30 @@ export default function OperationsDashboardPage() {
   const getAuthHeaders = () => {
     const sessionId = localStorage.getItem('marshal_session');
     return { 'Authorization': `Bearer ${sessionId}` };
+  };
+
+  // Helper function for authenticated file downloads
+  const handleAuthenticatedDownload = async (url, filename) => {
+    try {
+      const response = await fetch(url, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+      toast.success(`${filename} downloaded successfully`);
+    } catch (error) {
+      toast.error('Failed to download file');
+    }
   };
 
   // Auth check
@@ -438,6 +467,12 @@ export default function OperationsDashboardPage() {
               <p className="text-sm font-medium">{user?.full_name}</p>
               <Badge variant="secondary" className="text-xs">{user?.role?.replace('_', ' ')}</Badge>
             </div>
+            <Link to="/marshal-dashboard">
+              <Button variant="secondary" size="sm" className="gap-2">
+                <ClipboardCheck className="w-4 h-4" />
+                <span className="hidden md:inline">Volunteers</span>
+              </Button>
+            </Link>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="text-primary-foreground">
               <LogOut className="w-4 h-4" />
             </Button>
@@ -458,6 +493,9 @@ export default function OperationsDashboardPage() {
             <TabsTrigger value="submissions" className="gap-2">
               <FileText className="w-4 h-4" /> Submissions
             </TabsTrigger>
+            <TabsTrigger value="proam" className="gap-2">
+              <Trophy className="w-4 h-4" /> Pro-Am
+            </TabsTrigger>
             <TabsTrigger value="locations" className="gap-2">
               <MapPin className="w-4 h-4" /> Locations
             </TabsTrigger>
@@ -466,6 +504,9 @@ export default function OperationsDashboardPage() {
             </TabsTrigger>
             <TabsTrigger value="access" className="gap-2">
               <Key className="w-4 h-4" /> Access Levels
+            </TabsTrigger>
+            <TabsTrigger value="badges" className="gap-2">
+              <Download className="w-4 h-4" /> Badge Export
             </TabsTrigger>
             <TabsTrigger value="audit" className="gap-2">
               <History className="w-4 h-4" /> Audit Log
@@ -596,14 +637,105 @@ export default function OperationsDashboardPage() {
 
           {/* Submissions Tab */}
           <TabsContent value="submissions">
+            {/* Stats Summary */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+              <Card className="bg-blue-50 border-blue-200">
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold text-blue-600">
+                    {submissions.filter(s => s.status === 'submitted').length}
+                  </p>
+                  <p className="text-sm text-blue-700">Pending Review</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-yellow-50 border-yellow-200">
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold text-yellow-600">
+                    {submissions.filter(s => s.status === 'under_review').length}
+                  </p>
+                  <p className="text-sm text-yellow-700">Under Review</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-green-50 border-green-200">
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold text-green-600">
+                    {submissions.filter(s => s.status === 'approved').length}
+                  </p>
+                  <p className="text-sm text-green-700">Approved</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-red-50 border-red-200">
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold text-red-600">
+                    {submissions.filter(s => s.status === 'rejected').length}
+                  </p>
+                  <p className="text-sm text-red-700">Rejected</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-gray-50 border-gray-200">
+                <CardContent className="p-4 text-center">
+                  <p className="text-3xl font-bold text-gray-600">{submissions.length}</p>
+                  <p className="text-sm text-gray-700">Total</p>
+                </CardContent>
+              </Card>
+            </div>
+
             <Card>
               <CardHeader>
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <CardTitle>Accreditation Submissions</CardTitle>
+                  <div>
+                    <CardTitle>Accreditation Submissions</CardTitle>
+                    <CardDescription>Review and manage all application submissions</CardDescription>
+                  </div>
                   <div className="flex gap-2">
+                    {selectedSubmissions.length > 0 && canManage && (
+                      <>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="text-green-600"
+                          onClick={() => {
+                            selectedSubmissions.forEach(id => handleUpdateSubmission(id, { status: 'approved' }));
+                            setSelectedSubmissions([]);
+                          }}
+                        >
+                          <CheckCircle2 className="w-4 h-4 mr-1" /> Approve ({selectedSubmissions.length})
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          className="text-red-600"
+                          onClick={() => {
+                            selectedSubmissions.forEach(id => handleUpdateSubmission(id, { status: 'rejected' }));
+                            setSelectedSubmissions([]);
+                          }}
+                        >
+                          <XCircle className="w-4 h-4 mr-1" /> Reject ({selectedSubmissions.length})
+                        </Button>
+                      </>
+                    )}
                     <Button variant="outline" size="sm" onClick={fetchSubmissions}>
                       <RefreshCw className="w-4 h-4 mr-1" /> Refresh
                     </Button>
+                    {selectedModule !== 'all' && (
+                      <>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => handleAuthenticatedDownload(`${API}/accreditation/export/${selectedModule}`, `${selectedModule}_export.csv`)}
+                        >
+                          <Download className="w-4 h-4 mr-1" /> Export CSV
+                        </Button>
+                        <Button 
+                          variant="default" 
+                          size="sm"
+                          className="bg-accent text-accent-foreground hover:bg-accent/90"
+                          onClick={() => handleAuthenticatedDownload(`${API}/accreditation/export-badges/${selectedModule}?status=approved`, `${selectedModule}_badges.csv`)}
+                          data-testid="export-badges-btn"
+                        >
+                          <Download className="w-4 h-4 mr-1" /> Export Badges
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -614,15 +746,16 @@ export default function OperationsDashboardPage() {
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                       <Input
-                        placeholder="Search submissions..."
+                        placeholder="Search by name, email, company..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="pl-10"
+                        data-testid="submissions-search"
                       />
                     </div>
                   </div>
                   <Select value={selectedModule} onValueChange={setSelectedModule}>
-                    <SelectTrigger className="w-40">
+                    <SelectTrigger className="w-40" data-testid="module-filter">
                       <SelectValue placeholder="Module" />
                     </SelectTrigger>
                     <SelectContent>
@@ -633,7 +766,7 @@ export default function OperationsDashboardPage() {
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-40">
+                    <SelectTrigger className="w-40" data-testid="status-filter">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -648,62 +781,168 @@ export default function OperationsDashboardPage() {
                 </div>
 
                 {/* Submissions Table */}
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto border rounded-lg">
                   <table className="w-full">
                     <thead className="bg-muted">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">ID</th>
+                        {canManage && (
+                          <th className="px-4 py-3 w-10">
+                            <Checkbox
+                              checked={selectedSubmissions.length === submissions.filter(s => s.status === 'submitted').length && submissions.filter(s => s.status === 'submitted').length > 0}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedSubmissions(submissions.filter(s => s.status === 'submitted').map(s => s.submission_id));
+                                } else {
+                                  setSelectedSubmissions([]);
+                                }
+                              }}
+                            />
+                          </th>
+                        )}
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Module</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Applicant</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Contact</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Status</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Submitted</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {submissions.map(sub => (
-                        <tr key={sub.submission_id} className="border-b hover:bg-muted/50">
-                          <td className="px-4 py-3 text-sm font-mono">{sub.submission_id.slice(0, 8)}...</td>
-                          <td className="px-4 py-3">
-                            <Badge variant="outline">{moduleLabels[sub.module_type] || sub.module_type}</Badge>
-                          </td>
-                          <td className="px-4 py-3">
-                            <p className="font-medium">{sub.form_data?.name || sub.form_data?.company_name || sub.form_data?.full_name || '-'}</p>
-                            <p className="text-xs text-muted-foreground">{sub.form_data?.email || ''}</p>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={statusColors[sub.status]}>{sub.status}</Badge>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {new Date(sub.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => { setSelectedSubmission(sub); setShowSubmissionModal(true); }}>
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              {canManage && sub.status === 'submitted' && (
-                                <>
-                                  <Button variant="ghost" size="sm" className="text-green-600" onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'approved' })}>
-                                    <CheckCircle2 className="w-4 h-4" />
-                                  </Button>
-                                  <Button variant="ghost" size="sm" className="text-red-600" onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'rejected' })}>
-                                    <XCircle className="w-4 h-4" />
-                                  </Button>
-                                </>
+                      {submissions.map(sub => {
+                        const Icon = moduleIcons[sub.module_type] || FileText;
+                        return (
+                          <tr key={sub.submission_id} className="border-b hover:bg-muted/50" data-testid={`submission-row-${sub.submission_id}`}>
+                            {canManage && (
+                              <td className="px-4 py-3">
+                                {sub.status === 'submitted' && (
+                                  <Checkbox
+                                    checked={selectedSubmissions.includes(sub.submission_id)}
+                                    onCheckedChange={(checked) => {
+                                      if (checked) {
+                                        setSelectedSubmissions([...selectedSubmissions, sub.submission_id]);
+                                      } else {
+                                        setSelectedSubmissions(selectedSubmissions.filter(id => id !== sub.submission_id));
+                                      }
+                                    }}
+                                  />
+                                )}
+                              </td>
+                            )}
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <Icon className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm">{moduleLabels[sub.module_type] || sub.module_type}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <p className="font-medium text-sm">
+                                {sub.form_data?.company_name || sub.form_data?.full_name || sub.form_data?.name || '-'}
+                              </p>
+                              {sub.form_data?.contact_person && (
+                                <p className="text-xs text-muted-foreground">{sub.form_data.contact_person}</p>
                               )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="px-4 py-3">
+                              <p className="text-sm">{sub.form_data?.email || '-'}</p>
+                              <p className="text-xs text-muted-foreground">{sub.form_data?.phone || ''}</p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge className={statusColors[sub.status]}>
+                                {sub.status.replace('_', ' ')}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-muted-foreground">
+                              {new Date(sub.created_at).toLocaleDateString()}
+                              <br />
+                              <span className="text-xs">{new Date(sub.created_at).toLocaleTimeString()}</span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  onClick={() => { 
+                                    setSelectedSubmission(sub); 
+                                    setReviewerNotes(sub.reviewer_notes || '');
+                                    setShowSubmissionModal(true); 
+                                  }}
+                                  data-testid={`view-btn-${sub.submission_id}`}
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                                {canManage && sub.status === 'submitted' && (
+                                  <>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+                                      onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'under_review' })}
+                                      title="Mark as Under Review"
+                                    >
+                                      <Clock className="w-4 h-4" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                      onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'approved' })}
+                                      title="Approve"
+                                    >
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'rejected' })}
+                                      title="Reject"
+                                    >
+                                      <XCircle className="w-4 h-4" />
+                                    </Button>
+                                  </>
+                                )}
+                                {canManage && sub.status === 'under_review' && (
+                                  <>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                      onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'approved' })}
+                                    >
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={() => handleUpdateSubmission(sub.submission_id, { status: 'rejected' })}
+                                    >
+                                      <XCircle className="w-4 h-4" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                   {submissions.length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground">
-                      No submissions found
+                    <div className="text-center py-12 text-muted-foreground">
+                      <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p className="text-lg font-medium">No submissions found</p>
+                      <p className="text-sm">Try adjusting your filters or wait for new applications</p>
                     </div>
                   )}
                 </div>
+
+                {/* Pagination info */}
+                {submissions.length > 0 && (
+                  <div className="mt-4 text-sm text-muted-foreground">
+                    Showing {submissions.length} submission{submissions.length !== 1 ? 's' : ''}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -840,6 +1079,149 @@ export default function OperationsDashboardPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Pro-Am Tab */}
+          <TabsContent value="proam">
+            <ProAmManagement canManage={canManage} />
+          </TabsContent>
+
+          {/* Badge Export Tab */}
+          <TabsContent value="badges" data-testid="badges-tab">
+            <div className="space-y-6">
+              {/* Badge Export Header */}
+              <Card className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground">
+                <CardContent className="p-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center">
+                      <Download className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold">Badge Export Center</h2>
+                      <p className="text-primary-foreground/80">Export approved accreditations in badge-ready format for printing</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Export Options */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {modules.filter(m => m.is_active).map(mod => {
+                  const Icon = moduleIcons[mod.module_type] || FileText;
+                  const modStats = stats[mod.module_type] || {};
+                  const approvedCount = modStats.approved || 0;
+                  
+                  return (
+                    <Card key={mod.module_id} className="hover-lift" data-testid={`badge-export-${mod.module_type}`}>
+                      <CardHeader className="pb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                            <Icon className="w-6 h-6 text-primary" />
+                          </div>
+                          <div>
+                            <CardTitle className="text-base">{mod.name}</CardTitle>
+                            <p className="text-sm text-muted-foreground">{approvedCount} approved</p>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Ready for badges:</span>
+                            <span className="font-bold text-green-600">{approvedCount}</span>
+                          </div>
+                          <Button 
+                            className="w-full"
+                            disabled={approvedCount === 0}
+                            onClick={() => {
+                              handleAuthenticatedDownload(`${API}/accreditation/export-badges/${mod.module_type}?status=approved`, `${mod.module_type}_badges.csv`);
+                              toast.success(`Exporting ${mod.name} badges...`);
+                            }}
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Export Badge Data
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              {/* Badge Format Info */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="w-5 h-5" />
+                    Badge CSV Format
+                  </CardTitle>
+                  <CardDescription>The exported CSV includes the following fields for badge printing software</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {[
+                      { field: 'badge_id', desc: 'Unique ID' },
+                      { field: 'full_name', desc: 'Complete name' },
+                      { field: 'first_name', desc: 'First name' },
+                      { field: 'last_name', desc: 'Last name' },
+                      { field: 'organization', desc: 'Company/Org' },
+                      { field: 'role', desc: 'Job title' },
+                      { field: 'accreditation_type', desc: 'Badge type' },
+                      { field: 'access_level', desc: 'Zone access' },
+                      { field: 'email', desc: 'Email address' },
+                      { field: 'phone', desc: 'Phone number' },
+                      { field: 'photo_url', desc: 'Photo link' },
+                      { field: 'qr_code_data', desc: 'QR data' },
+                      { field: 'valid_from', desc: 'Start date' },
+                      { field: 'valid_to', desc: 'End date' }
+                    ].map(item => (
+                      <div key={item.field} className="p-2 bg-muted rounded text-sm">
+                        <code className="text-primary font-mono">{item.field}</code>
+                        <p className="text-xs text-muted-foreground mt-1">{item.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Quick Actions */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Bulk Export</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-3">
+                    <Button 
+                      variant="outline"
+                      onClick={() => {
+                        modules.filter(m => m.is_active).forEach(mod => {
+                          const modStats = stats[mod.module_type] || {};
+                          if (modStats.approved > 0) {
+                            handleAuthenticatedDownload(`${API}/accreditation/export-badges/${mod.module_type}?status=approved`, `${mod.module_type}_badges.csv`);
+                          }
+                        });
+                        toast.success('Exporting all badge data...');
+                      }}
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Export All Approved Badges
+                    </Button>
+                    <Button 
+                      variant="outline"
+                      onClick={() => {
+                        modules.filter(m => m.is_active).forEach(mod => {
+                          handleAuthenticatedDownload(`${API}/accreditation/export/${mod.module_type}`, `${mod.module_type}_full.csv`);
+                        });
+                        toast.success('Exporting all submission data...');
+                      }}
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      Export Full Data (All Status)
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           {/* Audit Log Tab */}
@@ -1000,58 +1382,168 @@ export default function OperationsDashboardPage() {
 
       {/* Submission Detail Modal */}
       <Dialog open={showSubmissionModal} onOpenChange={setShowSubmissionModal}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Submission Details</DialogTitle>
+            <DialogTitle className="flex items-center gap-3">
+              <FileText className="w-5 h-5" />
+              Application Details
+            </DialogTitle>
+            <DialogDescription>
+              Review submission and manage status
+            </DialogDescription>
           </DialogHeader>
           {selectedSubmission && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <Badge variant="outline">{moduleLabels[selectedSubmission.module_type]}</Badge>
-                <Badge className={statusColors[selectedSubmission.status]}>{selectedSubmission.status}</Badge>
+            <div className="space-y-6">
+              {/* Header Info */}
+              <div className="flex flex-wrap items-center gap-3 pb-4 border-b">
+                <Badge variant="outline" className="text-sm">
+                  {moduleLabels[selectedSubmission.module_type]}
+                </Badge>
+                <Badge className={`${statusColors[selectedSubmission.status]} text-sm`}>
+                  {selectedSubmission.status.replace('_', ' ')}
+                </Badge>
+                <span className="text-sm text-muted-foreground">
+                  Submitted: {new Date(selectedSubmission.created_at).toLocaleString()}
+                </span>
+                <span className="text-xs text-muted-foreground font-mono">
+                  ID: {selectedSubmission.submission_id}
+                </span>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                {Object.entries(selectedSubmission.form_data || {}).map(([key, value]) => (
-                  <div key={key}>
-                    <Label className="text-xs text-muted-foreground">{key.replace(/_/g, ' ')}</Label>
-                    <p className="font-medium">{String(value)}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="pt-4 border-t">
-                <Label className="text-xs text-muted-foreground">Assignment</Label>
-                <div className="grid grid-cols-2 gap-4 mt-2">
-                  <Select 
-                    value={selectedSubmission.assigned_location_id || ''} 
-                    onValueChange={(v) => handleUpdateSubmission(selectedSubmission.submission_id, { assigned_location_id: v })}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Assign Location" /></SelectTrigger>
-                    <SelectContent>
-                      {locations.map(l => <SelectItem key={l.location_id} value={l.location_id}>{l.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select 
-                    value={selectedSubmission.assigned_access_level_id || ''} 
-                    onValueChange={(v) => handleUpdateSubmission(selectedSubmission.submission_id, { assigned_access_level_id: v })}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Assign Access Level" /></SelectTrigger>
-                    <SelectContent>
-                      {accessLevels.map(l => <SelectItem key={l.access_level_id} value={l.access_level_id}>{l.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+
+              {/* Form Data - Organized by categories */}
+              <div className="space-y-4">
+                <h4 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">Application Information</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-muted/50 p-4 rounded-lg">
+                  {Object.entries(selectedSubmission.form_data || {}).map(([key, value]) => {
+                    if (!value) return null;
+                    const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    return (
+                      <div key={key} className={`${String(value).length > 50 ? 'md:col-span-2' : ''}`}>
+                        <Label className="text-xs text-muted-foreground uppercase tracking-wider">{formattedKey}</Label>
+                        <p className="font-medium mt-1 text-sm break-words whitespace-pre-wrap">{String(value)}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+
+              {/* Assignment Section */}
+              {canManage && (selectedSubmission.status === 'approved' || selectedSubmission.status === 'assigned') && (
+                <div className="space-y-4 pt-4 border-t">
+                  <h4 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">Assignment</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs">Assigned Location</Label>
+                      <Select 
+                        value={selectedSubmission.assigned_location_id || ''} 
+                        onValueChange={(v) => handleUpdateSubmission(selectedSubmission.submission_id, { assigned_location_id: v, status: 'assigned' })}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select Location" /></SelectTrigger>
+                        <SelectContent>
+                          {locations.map(l => <SelectItem key={l.location_id} value={l.location_id}>{l.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Access Level</Label>
+                      <Select 
+                        value={selectedSubmission.assigned_access_level_id || ''} 
+                        onValueChange={(v) => handleUpdateSubmission(selectedSubmission.submission_id, { assigned_access_level_id: v })}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select Access Level" /></SelectTrigger>
+                        <SelectContent>
+                          {accessLevels.map(l => (
+                            <SelectItem key={l.access_level_id} value={l.access_level_id}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded" style={{ backgroundColor: l.color }}></div>
+                                {l.name}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Reviewer Notes */}
+              {canManage && (
+                <div className="space-y-3 pt-4 border-t">
+                  <h4 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">Reviewer Notes</h4>
+                  <Textarea
+                    value={reviewerNotes}
+                    onChange={(e) => setReviewerNotes(e.target.value)}
+                    placeholder="Add internal notes about this application..."
+                    rows={3}
+                  />
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => handleUpdateSubmission(selectedSubmission.submission_id, { reviewer_notes: reviewerNotes })}
+                  >
+                    Save Notes
+                  </Button>
+                </div>
+              )}
+
+              {/* Status History */}
+              {selectedSubmission.status_history && selectedSubmission.status_history.length > 0 && (
+                <div className="space-y-3 pt-4 border-t">
+                  <h4 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">Status History</h4>
+                  <div className="space-y-2">
+                    {selectedSubmission.status_history.map((hist, i) => (
+                      <div key={i} className="flex items-center gap-3 text-sm">
+                        <Badge className={statusColors[hist.status]} variant="outline">{hist.status}</Badge>
+                        <span className="text-muted-foreground">
+                          {new Date(hist.changed_at).toLocaleString()}
+                        </span>
+                        {hist.changed_by && <span className="text-xs">by {hist.changed_by}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          <DialogFooter>
-            {canManage && selectedSubmission?.status === 'submitted' && (
+          <DialogFooter className="flex-col sm:flex-row gap-2 pt-4 border-t">
+            <Button variant="outline" onClick={() => setShowSubmissionModal(false)}>
+              Close
+            </Button>
+            {canManage && selectedSubmission && (
               <>
-                <Button variant="outline" className="text-red-600" onClick={() => handleUpdateSubmission(selectedSubmission.submission_id, { status: 'rejected' })}>
-                  Reject
-                </Button>
-                <Button onClick={() => handleUpdateSubmission(selectedSubmission.submission_id, { status: 'approved' })}>
-                  Approve
-                </Button>
+                {(selectedSubmission.status === 'submitted' || selectedSubmission.status === 'under_review') && (
+                  <>
+                    {selectedSubmission.status === 'submitted' && (
+                      <Button 
+                        variant="outline" 
+                        className="text-yellow-600 border-yellow-300 hover:bg-yellow-50"
+                        onClick={() => {
+                          handleUpdateSubmission(selectedSubmission.submission_id, { status: 'under_review' });
+                        }}
+                      >
+                        <Clock className="w-4 h-4 mr-2" /> Mark Under Review
+                      </Button>
+                    )}
+                    <Button 
+                      variant="outline" 
+                      className="text-red-600 border-red-300 hover:bg-red-50"
+                      onClick={() => {
+                        handleUpdateSubmission(selectedSubmission.submission_id, { status: 'rejected', reviewer_notes: reviewerNotes });
+                      }}
+                    >
+                      <XCircle className="w-4 h-4 mr-2" /> Reject
+                    </Button>
+                    <Button 
+                      className="bg-green-600 hover:bg-green-700"
+                      onClick={() => {
+                        handleUpdateSubmission(selectedSubmission.submission_id, { status: 'approved', reviewer_notes: reviewerNotes });
+                      }}
+                    >
+                      <CheckCircle2 className="w-4 h-4 mr-2" /> Approve
+                    </Button>
+                  </>
+                )}
               </>
             )}
           </DialogFooter>
